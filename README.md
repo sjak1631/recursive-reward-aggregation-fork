@@ -102,16 +102,16 @@ cd portfolio
 
 | dsum                                                            | dmax | min | dsum + dmax | dsum - var |
 |-----------------------------------------------------------------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Lunar_dsum.gif" height="150"> | <img src="continuous_control/gifs/Lunar_dmax.gif" height="150"> | <img src="continuous_control/gifs/Lunar_min.gif" height="150"> | <img src="continuous_control/gifs/Lunar_dsum_dmax.gif" height="150"> | <img src="continuous_control/gifs/Lunar_dsum_var.gif" height="150"> |
+| <img src="continuous_control/gifs/Lunar_dsum.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dmax.gif" width="150"> | <img src="continuous_control/gifs/Lunar_min.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dsum_var.gif" width="150"> |
 
 ### Hopper
 
 | dsum | dmax | min | dsum + dmax | dsum - var |
 |------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Hopper_dsum.gif" height="150"> | <img src="continuous_control/gifs/Hopper_dmax.gif" height="150"> | <img src="continuous_control/gifs/Hopper_min.gif" height="150"> | <img src="continuous_control/gifs/Hopper_dsum_dmax.gif" height="150"> | <img src="continuous_control/gifs/Hopper_dsum_var.gif" height="150"> |
+| <img src="continuous_control/gifs/Hopper_dsum.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dmax.gif" width="150"> | <img src="continuous_control/gifs/Hopper_min.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dsum_var.gif" width="150"> |
 
 ### Ant
 
 | dsum | dmax | min | dsum + dmax | dsum - var |
 |------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Ant_dsum.gif" height="150"> | <img src="continuous_control/gifs/Ant_dmax.gif" height="150"> | <img src="continuous_control/gifs/Ant_min.gif" height="150"> | <img src="continuous_control/gifs/Ant_dsum_dmax.gif" height="150"> | <img src="continuous_control/gifs/Ant_dsum_var.gif" height="150"> |
+| <img src="continuous_control/gifs/Ant_dsum.gif" width="150"> | <img src="continuous_control/gifs/Ant_dmax.gif" width="150"> | <img src="continuous_control/gifs/Ant_min.gif" width="150"> | <img src="continuous_control/gifs/Ant_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Ant_dsum_var.gif" width="150"> |
