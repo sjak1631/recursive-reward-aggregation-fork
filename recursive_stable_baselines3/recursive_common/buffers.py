@@ -7,8 +7,6 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 
-from scipy.special import logsumexp
-
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
 from stable_baselines3.common.vec_env import VecNormalize
 
@@ -31,13 +29,6 @@ except ImportError:
 class BaseBuffer(ABC):
     """
     Base class that represent a buffer (rollout or replay)
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-        to which the values will be converted
-    :param n_envs: Number of parallel environments
     """
 
     observation_space: spaces.Space
@@ -65,14 +56,6 @@ class BaseBuffer(ABC):
 
     @staticmethod
     def swap_and_flatten(arr: np.ndarray) -> np.ndarray:
-        """
-        Swap and then flatten axes 0 (buffer_size) and 1 (n_envs)
-        to convert shape from [n_steps, n_envs, ...] (when ... is the shape of the features)
-        to [n_steps * n_envs, ...] (which maintain the order)
-
-        :param arr:
-        :return:
-        """
         shape = arr.shape
         if len(shape) < 3:
             shape = (*shape, 1)
@@ -162,21 +145,6 @@ class BaseBuffer(ABC):
 class ReplayBuffer(BaseBuffer):
     """
     Replay buffer used in off-policy algorithms like SAC/TD3.
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-    :param n_envs: Number of parallel environments
-    :param optimize_memory_usage: Enable a memory efficient variant
-        of the replay buffer which reduces by almost a factor two the memory used,
-        at a cost of more complexity.
-        See https://github.com/DLR-RM/stable-baselines3/issues/37#issuecomment-637501195
-        and https://github.com/DLR-RM/stable-baselines3/pull/28#issuecomment-637559274
-        Cannot be used in combination with handle_timeout_termination.
-    :param handle_timeout_termination: Handle timeout termination (due to timelimit)
-        separately and treat the task as infinite horizon task.
-        https://github.com/DLR-RM/stable-baselines3/issues/284
     """
 
     observations: np.ndarray
@@ -345,27 +313,6 @@ class ReplayBuffer(BaseBuffer):
 
 
 class RolloutBuffer(BaseBuffer):
-    """
-    Rollout buffer used in on-policy algorithms like A2C/PPO.
-    It corresponds to ``buffer_size`` transitions collected
-    using the current policy.
-    This experience will be discarded after the policy update.
-    In order to use PPO objective, we also store the current value of each state
-    and the log probability of each taken action.
-
-    The term rollout here refers to the model-free notion and should not
-    be used with the concept of rollout used in model-based RL or planning.
-    Hence, it is only involved in policy and value function training but not action selection.
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-        Equivalent to classic advantage when set to 1.
-    :param gamma: Discount factor
-    :param n_envs: Number of parallel environments
-    """
 
     observations: np.ndarray
     actions: np.ndarray
@@ -380,6 +327,11 @@ class RolloutBuffer(BaseBuffer):
 
     def __init__(
         self,
+
+        init,
+        update,
+        post,
+
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
@@ -394,12 +346,17 @@ class RolloutBuffer(BaseBuffer):
         self.generator_ready = False
         self.reset()
 
+        self.init = init
+        self.update = update
+        self.post = post
+
+
     def reset(self) -> None:
         self.observations = np.zeros((self.buffer_size, self.n_envs, *self.obs_shape), dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.returns = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
-        self.count_step = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)  # for mean
+        self.count_step = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.episode_starts = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.values = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
         self.taus = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
@@ -408,25 +365,20 @@ class RolloutBuffer(BaseBuffer):
         self.generator_ready = False
         super().reset()
 
-
-    def compute_returns_and_advantage_recursive_mc(self, last_taus: th.Tensor, dones: np.ndarray, recursive_type: Any) -> None:
-        last_taus = last_taus.clone().cpu().numpy().flatten()
-        G_t = last_taus
-        # print("last_taus", last_taus, "G_t", G_t)
+    # Monte Carlo Advantage
+    def compute_returns_and_advantage_recursive_mc(self, last_taus: th.Tensor, dones: np.ndarray) -> None:
+        last_taus_ = last_taus.clone().cpu().numpy().flatten()
         for step in reversed(range(self.buffer_size)):
             if step == self.buffer_size - 1:
-                G_t = self.update(self.rewards[step], G_t * (1 - dones.astype(np.float32)), recursive_type)
-                # print("type_1", G_t, dones.astype(np.float32))
+                next_non_terminal = 1 - dones.astype(np.float32)
             else:
                 next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                G_t = self.update(self.rewards[step], G_t * next_non_terminal, recursive_type)
-                # print("type_3", G_t, self.rewards[step])
 
-            self.returns[step] = self.post(G_t, recursive_type)
-            # print("self.returns[step]", step, self.returns[step])
-            self.advantages[step] = self.post(G_t, recursive_type) - self.post(self.taus[step], recursive_type)  # Monte Carlo Advantage
-            # print("self.advantages[step]", step, self.advantages[step])
-        print("gae_mc", "returns", self.returns, "advantage", self.advantages)
+            tau_input = np.where(next_non_terminal == 0, self.init, last_taus_)
+            last_taus_ = self.update(self.rewards[step], tau_input)
+
+            self.returns[step] = self.post(last_taus_)
+            self.advantages[step] = self.post(last_taus_) - self.post(self.taus[step])
 
 
     def compute_returns_and_advantage_recursive_gae(self, last_taus: th.Tensor, dones: np.ndarray, recursive_type: Any) -> None:
@@ -447,164 +399,43 @@ class RolloutBuffer(BaseBuffer):
             episode_end = start_indices[i]
             for n in range(0, episode_end - step):
                 if n == self.buffer_size - 1 - step:
-                    taus_to_go[n] = self.update(self.rewards[n], last_taus * dones.astype(np.float32), recursive_type)
+                    next_non_terminal = 1 - dones.astype(np.float32)
+                    tau_input = np.where(next_non_terminal == 0, self.init, last_taus)
+                    taus_to_go[n] = self.update(self.rewards[n], tau_input)
                 elif n == episode_end - 1 - step:
-                    taus_to_go[n] = self.update(self.rewards[n], taus_to_go[n+1]*0, recursive_type)
-                    # print("episode_end - step", n, episode_end - 1 - step)
+                    taus_to_go[n] = self.update(self.rewards[n], self.init)
                 else:
-                    taus_to_go[n] = self.update(self.rewards[n], taus_to_go[n+1], recursive_type)
+                    taus_to_go[n] = self.update(self.rewards[n], taus_to_go[n+1])
                 if i-1 >= 0:
-                    adv[step][start_indices[i-1] + n] = self.post(taus_to_go[n], recursive_type) - self.post(self.taus[n], recursive_type)
+                    adv[step][start_indices[i-1] + n] = self.post(taus_to_go[n]) - self.post(self.taus[n])
                     adv[step][start_indices[i-1] + n] = adv[step][start_indices[i-1] + n] * (1 - self.gae_lambda) * (self.gae_lambda ** (step - start_indices[i-1]))
-                    # print("self.gae_lambda ** (step - start_indices[i-1])", step - start_indices[i-1], self.gae_lambda ** (step - start_indices[i-1]))
                 else:
-                    adv[step][n] = self.post(taus_to_go[n], recursive_type) - self.post(self.taus[n], recursive_type)
+                    adv[step][n] = self.post(taus_to_go[n]) - self.post(self.taus[n])
                     adv[step][n] = adv[step][n] * (1 - self.gae_lambda) * (self.gae_lambda ** (step))
 
         self.advantages = adv.sum(axis=0).reshape(-1, 1).astype(np.float32)
-        self.returns = self.advantages + self.post(self.taus, recursive_type).astype(np.float32)
-        print("gae_gae", "returns", self.returns, "advantage", self.advantages)
+        self.returns = self.advantages + self.post(self.taus).astype(np.float32)
 
 
-    def compute_returns_and_advantage_recursive(self, last_taus: th.Tensor, dones: np.ndarray, recursive_type: Any) -> None:
+    def compute_returns_and_advantage_recursive(self, last_taus: th.Tensor, dones: np.ndarray) -> None:
         last_taus = last_taus.clone().cpu().numpy().flatten()
+        last_gae_lam = 0
+        for step in reversed(range(self.buffer_size)):
+            if step == self.buffer_size - 1:
+                next_non_terminal = 1.0 - dones.astype(np.float32)
+                next_tau = last_taus
+            else:
+                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+                next_tau = self.taus[step + 1]
 
-        if recursive_type == "dsum":
-            print("dsum")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
+            tau_input = np.where(next_non_terminal == 0, self.init, next_tau)
+            next_tau_ = self.update(self.rewards[step], tau_input)
 
-                delta = (self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type), recursive_type)
-                         - self.post(self.taus[step], recursive_type))
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                # last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                last_gae_lam = delta + next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            self.returns = self.advantages + self.taus
-            print("gae_original", "returns", self.returns, "advantage", self.advantages)
-
-        elif recursive_type == "dmax":
-            print("dmax")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type), recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            self.returns = self.advantages + self.taus
-
-        elif recursive_type == "min":
-            print("min")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type), recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            self.returns = self.advantages + self.taus
-
-        elif recursive_type == "log-sum-exp":
-            print("log-sum-exp")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            self.returns = self.advantages + self.taus
-
-        elif recursive_type == "mean":
-            print("mean")
-            last_gae_lam = 0
-            count_step = 10
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                    count_step += 1
-                    self.count_step[step] = count_step
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-                    if next_non_terminal:
-                        count_step += 1
-                        self.count_step[step] = count_step
-                    else:
-                        count_step = 1
-                        self.count_step[step] = count_step
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type, count_step),
-                                  recursive_type, count_step) - self.post(self.taus[step], recursive_type, count_step)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            self.returns = self.advantages + self.taus
-
-
-
-    def update(self, rewards, tau, recursive_type: Any, count_step: int = 1) -> th.Tensor:
-        if recursive_type == "dsum":
-            update_tau = rewards + self.gamma * tau
-            return update_tau
-        elif recursive_type == "dmax":
-            update_tau = max(rewards, self.gamma * tau)
-            return update_tau
-        elif recursive_type == "min":
-            update_tau = min(rewards, tau)
-            return update_tau
-        elif recursive_type == "log-sum-exp":
-            update_tau = logsumexp([rewards, tau])
-            return update_tau
-        elif recursive_type == "mean":
-            sum_reward = rewards + tau * (count_step - 1)
-            update_tau = sum_reward / count_step
-            return update_tau
-
-
-    def post(self, tau, recursive_type: Any, count_step: int = 1):
-        if recursive_type == "dsum":
-            post_tau = tau
-            return post_tau
-        elif recursive_type == "dmax":
-            post_tau = tau
-            return post_tau
-        elif recursive_type == "min":
-            post_tau = tau
-            return post_tau
-        elif recursive_type == "log-sum-exp":
-            post_tau = tau
-            return post_tau
-        elif recursive_type == "mean":
-            post_tau = tau
-            return post_tau
+            delta = (self.post(next_tau_) - self.post(self.taus[step]))
+            last_gae_lam = delta + next_non_terminal * last_gae_lam
+            self.advantages[step] = last_gae_lam
+        self.returns = self.advantages + self.taus
+        print("gae_original", "returns", self.returns, "advantage", self.advantages)
 
 
     def add(
@@ -617,16 +448,7 @@ class RolloutBuffer(BaseBuffer):
         tau: th.Tensor,
         log_prob: th.Tensor,
     ) -> None:
-        """
-        :param obs: Observation
-        :param action: Action
-        :param reward:
-        :param episode_start: Start of episode signal.
-        :param value: estimated value of the current state
-            following the current policy.
-        :param log_prob: log probability of the action
-            following the current policy.
-        """
+
         if len(log_prob.shape) == 0:
             # Reshape 0-d tensor to avoid error
             log_prob = log_prob.reshape(-1, 1)
@@ -698,27 +520,6 @@ class RolloutBuffer(BaseBuffer):
 
 
 class RolloutBuffer_multi_output(BaseBuffer):
-    """
-    Rollout buffer used in on-policy algorithms like A2C/PPO.
-    It corresponds to ``buffer_size`` transitions collected
-    using the current policy.
-    This experience will be discarded after the policy update.
-    In order to use PPO objective, we also store the current value of each state
-    and the log probability of each taken action.
-
-    The term rollout here refers to the model-free notion and should not
-    be used with the concept of rollout used in model-based RL or planning.
-    Hence, it is only involved in policy and value function training but not action selection.
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-        Equivalent to classic advantage when set to 1.
-    :param gamma: Discount factor
-    :param n_envs: Number of parallel environments
-    """
 
     observations: np.ndarray
     actions: np.ndarray
@@ -731,6 +532,11 @@ class RolloutBuffer_multi_output(BaseBuffer):
 
     def __init__(
         self,
+
+        init,
+        update,
+        post,
+
         buffer_size: int,
         observation_space: spaces.Space,
         action_space: spaces.Space,
@@ -747,6 +553,10 @@ class RolloutBuffer_multi_output(BaseBuffer):
         self.output_feature_num = output_feature_num
         self.reset()
 
+        self.init = init
+        self.update = update
+        self.post = post
+
     def reset(self) -> None:
         self.observations = np.zeros((self.buffer_size, self.n_envs, *self.obs_shape), dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_envs, self.action_dim), dtype=np.float32)
@@ -759,162 +569,29 @@ class RolloutBuffer_multi_output(BaseBuffer):
         self.generator_ready = False
         super().reset()
 
-
-    def compute_returns_and_advantage_recursive(self, last_taus: th.Tensor, dones: np.ndarray, recursive_type: Any) -> None:
+    def compute_returns_and_advantage_recursive(self, last_taus: th.Tensor, dones: np.ndarray) -> None:
         last_taus = last_taus.clone().cpu().numpy()
+        last_gae_lam = 0
+        for step in reversed(range(self.buffer_size)):
+            if step == self.buffer_size - 1:
+                next_non_terminal = 1.0 - dones.astype(np.float32)
+                next_tau = last_taus
+            else:
+                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+                next_tau = self.taus[step + 1]
+            next_non_terminal_ = next_non_terminal[:, None]
 
-        if recursive_type == "mean_multi_output":
-            print("mean_multi_output")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
+            tau_input = np.where(next_non_terminal_ == 0, self.init, next_tau)
+            next_tau = self.update(self.rewards[step], tau_input)
 
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
+            delta = self.post(next_tau) - self.post(self.taus[step])
+            last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
+            self.advantages[step] = last_gae_lam
+        self.returns = self.advantages + self.post(self.taus)
 
-        elif recursive_type == "range_multi_output":
-            print("range_multi_output")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-        elif recursive_type == "p-mean_multi_output":  # p = 2
-            print("p-mean_multi_output")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-        elif recursive_type == "sum_variance_multi_output":
-            print("dsum_variance_multi_output")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-                # print(f"Shape of next_tau * next_non_terminal: {next_tau}, {next_non_terminal}")
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-        elif recursive_type == "sum_range_multi_output":
-            print("dsum_range_multi_output")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-        elif recursive_type == "sharpe_3":
-            print("sharpe_3")
-            last_gae_lam = 0
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                # print(f"Shape of next_tau * next_non_terminal: {next_tau}, {next_non_terminal}")
-                # next_non_terminal = next_non_terminal[:, None]
-                # print(f"Shape of next_tau * next_non_terminal: {next_tau}, {next_non_terminal}")
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # print("delta", delta.shape, delta)
-                # print("next_non_terminal", next_non_terminal.shape, next_non_terminal)
-                # print("last_gae_lam", last_gae_lam.shape, last_gae_lam)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-        elif recursive_type == "sharpe_3_multi_env":
-            print("sharpe_3_multi_env")
-            last_gae_lam = np.zeros(10)
-            for step in reversed(range(self.buffer_size)):
-                if step == self.buffer_size - 1:
-                    next_non_terminal = 1.0 - dones.astype(np.float32)
-                    next_tau = last_taus
-                else:
-                    next_non_terminal = 1.0 - self.episode_starts[step + 1]
-                    next_tau = self.taus[step + 1]
-
-                next_non_terminal_ = next_non_terminal[:, None]
-
-                delta = self.post(self.update(self.rewards[step], next_tau * next_non_terminal_, recursive_type),
-                                  recursive_type) - self.post(self.taus[step], recursive_type)
-                # print("delta", delta.shape, delta)
-                # print("next_non_terminal", next_non_terminal.shape, next_non_terminal)
-                # print("last_gae_lam", last_gae_lam.shape, last_gae_lam)
-                # last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam   # gamma
-                last_gae_lam = delta + self.gae_lambda * next_non_terminal * last_gae_lam
-                self.advantages[step] = last_gae_lam
-            # print("self.taus", self.taus.shape)
-            self.returns = self.advantages + self.post(self.taus, recursive_type)
-
-
-    def compute_returns_and_advantage_recursive_mc(self, last_taus: th.Tensor, dones: np.ndarray, recursive_type: Any) -> None:
-        print("compute_returns_and_advantage_recursive_mc, sharpe")
-        last_taus = last_taus.clone().cpu().numpy()
-        G_t = last_taus
-        # print("last_taus", last_taus, "G_t", G_t)
+    # Monte Carlo Advantage
+    def compute_returns_and_advantage_recursive_mc(self, last_taus: th.Tensor, dones: np.ndarray) -> None:
+        last_taus_ = last_taus.clone().cpu().numpy()
         for step in reversed(range(self.buffer_size)):
             if step == self.buffer_size - 1:
                 next_non_terminal = 1 - dones.astype(np.float32)
@@ -922,117 +599,11 @@ class RolloutBuffer_multi_output(BaseBuffer):
                 next_non_terminal = 1.0 - self.episode_starts[step + 1]
             next_non_terminal_ = next_non_terminal[:, None]
 
-            # print("G_t_1", G_t)
-            # G_t = self.update(self.rewards[step], G_t * next_non_terminal_, recursive_type)
-            G_t = np.clip(self.update(self.rewards[step], G_t * next_non_terminal_, recursive_type), -1e6, 1e6)
-            # if step >= self.buffer_size-100:
-                # print("G_t_2", step, G_t.shape, G_t)
-            # print("self.rewards[step]", self.rewards[step].shape, self.rewards[step])
-            # print("next_non_terminal_", next_non_terminal_.shape, next_non_terminal_)
+            tau_input = np.where(next_non_terminal_ == 0, self.init, last_taus_)
+            last_taus_ = np.clip(self.update(self.rewards[step], tau_input), -1e6, 1e6)
 
-            self.returns[step] = self.post(G_t, recursive_type)
-            self.advantages[step] = self.post(G_t, recursive_type) - self.post(self.taus[step], recursive_type)  # Monte Carlo Advantage
-        # print("gae_mc", "returns", self.returns, "advantage", self.advantages)
-
-
-    def update(self, rewards, tau, recursive_type: Any) -> th.Tensor:
-        if recursive_type == "mean_multi_output":
-            update_tau = tau
-            tau_sum, tau_length = tau[:,0], tau[:,1]
-            update_tau[:, 0] = rewards + tau_sum
-            update_tau[:, 1] = 1 + tau_length
-            return update_tau
-
-        elif recursive_type == "range_multi_output":
-            update_tau = tau
-            tau_max, tau_min = tau[:, 0], tau[:, 1]
-            update_tau[:, 0] = max(rewards, tau_max)
-            update_tau[:, 1] = max(rewards, tau_min)
-            return update_tau
-
-        elif recursive_type == "p-mean_multi_output":
-            update_tau = tau
-            tau_p_mean, tau_length = tau[:, 0], tau[:, 1]
-            update_tau[:, 1] = 1 + tau_length
-            update_tau[:, 0] = (((rewards**2) + tau_length * (tau_p_mean**2)) / update_tau[:, 1])**(1/2)
-            return update_tau
-
-        elif recursive_type == "sum_variance_multi_output":
-            update_tau = tau
-            tau_sum, tau_sum_square, tau_length = tau[:, 0], tau[:, 1], tau[:, 2]
-            update_tau[:, 0] = rewards + self.gamma * tau_sum
-            update_tau[:, 1] = rewards**2 + tau_sum_square
-            update_tau[:, 2] = 1 + tau_length
-            return update_tau
-
-        elif recursive_type == "sum_range_multi_output":
-            update_tau = tau
-            tau_sum, tau_max, tau_min = tau[:, 0], tau[:, 1], tau[:, 2]
-            update_tau[:, 0] = rewards + self.gamma * tau_sum
-            update_tau[:, 1] = max(rewards, tau_max)
-            update_tau[:, 2] = min(rewards, tau_min)
-            return update_tau
-
-        elif recursive_type == "sharpe_3":
-            update_tau = tau
-            tau_mean, tau_variance, tau_length = tau[:, 0], tau[:, 1], tau[:, 2]
-            tau_length = softplus(tau_length)
-            update_tau[:, 2] = 1 + tau_length
-            update_tau[:, 0] = tau_mean + ((rewards - tau_mean) / update_tau[:, 2])
-            update_tau[:, 1] = tau_variance + ((rewards - update_tau[:, 0]) * (rewards - tau_mean) - tau_variance) / update_tau[:, 2]
-            return update_tau
-
-        elif recursive_type == "sharpe_3_multi_env":
-            update_tau = tau
-            tau_mean, tau_variance, tau_length = tau[:, 0], tau[:, 1], tau[:, 2]
-            tau_length = softplus(tau_length)
-            # print("tau_length", tau_length)
-            update_tau[:, 2] = 1 + tau_length
-            update_tau[:, 0] = tau_mean + ((rewards - tau_mean) / update_tau[:, 2])
-            update_tau[:, 1] = tau_variance + ((rewards - update_tau[:, 0]) * (rewards - tau_mean) - tau_variance) / update_tau[:, 2]
-            return update_tau
-
-
-    def post(self, tau, recursive_type: Any):
-        if recursive_type == "mean_multi_output":
-            tau_sum, tau_length = tau[...,0], tau[...,1]
-            post_tau = tau_sum / tau_length
-            return post_tau
-
-        elif recursive_type == "range_multi_output":
-            tau_max, tau_min = tau[...,0], tau[...,1]
-            post_tau = tau_max - tau_min
-            return post_tau
-
-        elif recursive_type == "p-mean_multi_output":
-            post_tau = tau[...,0]
-            return post_tau
-
-        elif recursive_type == "sum_variance_multi_output":
-            tau_sum, tau_sum_square, tau_length = tau[..., 0], tau[..., 1], tau[..., 2]
-            post_tau_sum = tau_sum
-            post_tau_variance = (tau_sum_square/tau_length) - (tau_sum/tau_length)**2
-            post_tau = post_tau_sum - 0.2 * post_tau_variance
-            return post_tau
-
-        elif recursive_type == "sum_range_multi_output":
-            tau_sum, tau_max, tau_min = tau[..., 0], tau[..., 1], tau[..., 2]
-            post_tau_sum = tau_sum
-            post_tau_range = tau_max - tau_min
-            post_tau = post_tau_sum - 0.2 * post_tau_range
-            return post_tau
-
-        elif recursive_type == "sharpe_3":
-            tau_mean, tau_variance, tau_length = tau[..., 0], tau[..., 1], tau[..., 2]
-            tau_variance = softplus(tau_variance)
-            post_tau = tau_mean / np.sqrt(tau_variance + 1e-8)
-            return post_tau
-
-        elif recursive_type == "sharpe_3_multi_env":
-            tau_mean, tau_variance, tau_length = tau[..., 0], tau[..., 1], tau[..., 2]
-            tau_variance = softplus(tau_variance)
-            post_tau = tau_mean / np.sqrt(tau_variance + 1e-8)
-            return post_tau
+            self.returns[step] = self.post(last_taus_)
+            self.advantages[step] = self.post(last_taus_) - self.post(self.taus[step])
 
 
     def add(
@@ -1044,16 +615,6 @@ class RolloutBuffer_multi_output(BaseBuffer):
         tau: th.Tensor,
         log_prob: th.Tensor,
     ) -> None:
-        """
-        :param obs: Observation
-        :param action: Action
-        :param reward:
-        :param episode_start: Start of episode signal.
-        :param value: estimated value of the current state
-            following the current policy.
-        :param log_prob: log probability of the action
-            following the current policy.
-        """
         if len(log_prob.shape) == 0:
             # Reshape 0-d tensor to avoid error
             log_prob = log_prob.reshape(-1, 1)
@@ -1119,22 +680,10 @@ class RolloutBuffer_multi_output(BaseBuffer):
         return RolloutBufferSamples_multi_output(*tuple(map(self.to_torch, data)))
 
 
-
 class DictReplayBuffer(ReplayBuffer):
     """
     Dict Replay buffer used in off-policy algorithms like SAC/TD3.
     Extends the ReplayBuffer to use dictionary observations
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-    :param n_envs: Number of parallel environments
-    :param optimize_memory_usage: Enable a memory efficient variant
-        Disabled for now (see https://github.com/DLR-RM/stable-baselines3/pull/243#discussion_r531535702)
-    :param handle_timeout_termination: Handle timeout termination (due to timelimit)
-        separately and treat the task as infinite horizon task.
-        https://github.com/DLR-RM/stable-baselines3/issues/284
     """
 
     observation_space: spaces.Dict
@@ -1251,11 +800,6 @@ class DictReplayBuffer(ReplayBuffer):
     ) -> DictReplayBufferSamples:
         """
         Sample elements from the replay buffer.
-
-        :param batch_size: Number of element to sample
-        :param env: associated gym VecEnv
-            to normalize the observations/rewards when sampling
-        :return:
         """
         return super(ReplayBuffer, self).sample(batch_size=batch_size, env=env)
 
@@ -1293,36 +837,17 @@ class DictReplayBuffer(ReplayBuffer):
 
 
 class DictRolloutBuffer(RolloutBuffer):
-    """
-    Dict Rollout buffer used in on-policy algorithms like A2C/PPO.
-    Extends the RolloutBuffer to use dictionary observations
-
-    It corresponds to ``buffer_size`` transitions collected
-    using the current policy.
-    This experience will be discarded after the policy update.
-    In order to use PPO objective, we also store the current value of each state
-    and the log probability of each taken action.
-
-    The term rollout here refers to the model-free notion and should not
-    be used with the concept of rollout used in model-based RL or planning.
-    Hence, it is only involved in policy and value function training but not action selection.
-
-    :param buffer_size: Max number of element in the buffer
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param device: PyTorch device
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-        Equivalent to Monte-Carlo advantage estimate when set to 1.
-    :param gamma: Discount factor
-    :param n_envs: Number of parallel environments
-    """
-
     observation_space: spaces.Dict
     obs_shape: dict[str, tuple[int, ...]]  # type: ignore[assignment]
     observations: dict[str, np.ndarray]  # type: ignore[assignment]
 
     def __init__(
         self,
+
+        init,
+        update,
+        post,
+
         buffer_size: int,
         observation_space: spaces.Dict,
         action_space: spaces.Space,
@@ -1341,6 +866,10 @@ class DictRolloutBuffer(RolloutBuffer):
         self.generator_ready = False
         self.reset()
 
+        self.init = init
+        self.update = update
+        self.post = post
+
     def reset(self) -> None:
         self.observations = {}
         for key, obs_input_shape in self.obs_shape.items():
@@ -1355,25 +884,17 @@ class DictRolloutBuffer(RolloutBuffer):
         self.generator_ready = False
         super(RolloutBuffer, self).reset()
 
-    def add(  # type: ignore[override]
+    def add(  #type: ignore[override]
         self,
         obs: dict[str, np.ndarray],
         action: np.ndarray,
         reward: np.ndarray,
         episode_start: np.ndarray,
         value: th.Tensor,
+        tau: th.Tensor,
         log_prob: th.Tensor,
     ) -> None:
-        """
-        :param obs: Observation
-        :param action: Action
-        :param reward:
-        :param episode_start: Start of episode signal.
-        :param value: estimated value of the current state
-            following the current policy.
-        :param log_prob: log probability of the action
-            following the current policy.
-        """
+
         if len(log_prob.shape) == 0:
             # Reshape 0-d tensor to avoid error
             log_prob = log_prob.reshape(-1, 1)
@@ -1438,8 +959,6 @@ class DictRolloutBuffer(RolloutBuffer):
             returns=self.to_torch(self.returns[batch_inds].flatten()),
         )
 
-# def softplus(x):
-#     return np.log(1 + np.exp(x))
 
 def softplus(x):
     return th.nn.functional.softplus(th.tensor(x, dtype=th.float32)).numpy()

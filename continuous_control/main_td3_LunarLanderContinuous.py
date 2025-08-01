@@ -1,24 +1,26 @@
 import sys
 import argparse
 import os
+import torch as th
 
-# sys.path.insert(0, "/workspace/stable-baselines3")
 sys.path.insert(0, os.path.abspath("."))
 sys.path.insert(0, os.path.abspath(".."))
 
 import gymnasium as gym
 from recursive_stable_baselines3 import TD3
+from recursive_stable_baselines3.recursive_common.statistics import *
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-import numpy as np
 
-parser = argparse.ArgumentParser(description="Train PPO on Hopper-v4")
+parser = argparse.ArgumentParser(description="Train PPO on LunarLanderContinuous-v3")
 parser.add_argument("--seed", type=int, default=42, help="Random seed")
-parser.add_argument("--env", type=str, default="Hopper-v4", help="Gym environment name")
-parser.add_argument("--env_name", type=str, default="Hopper", help="Gym environment name for file")
+parser.add_argument("--env", type=str, default="LunarLanderContinuous-v3", help="Gym environment name")
+parser.add_argument("--env_name", type=str, default="LunarLanderContinuous", help="Gym environment name for file")
 parser.add_argument("--recursive_type", type=str, default="min", help="Recursive type")
 parser.add_argument("--output_number", type=int, default=1, help="output number")
+parser.add_argument("--gamma", type=float, default=0.99, help="gamma")
+parser.add_argument("--lam", type=float, default=0.5, help="lambda")
 args = parser.parse_args()
 
 seed = args.seed
@@ -29,9 +31,67 @@ obs, _ = env.reset(seed=args.seed)
 env.action_space.seed(seed)
 env = Monitor(env)
 
+
+if args.recursive_type == 'dsum':
+    init = init_dsum()
+    update = update_dsum(args.gamma)
+    post = post_id
+
+elif args.recursive_type == 'dmax':
+    init = init_dmax()
+    update = update_dmax(args.gamma)
+    post = post_id
+
+elif args.recursive_type == 'min':
+    init = init_min()
+    update = update_min
+    post = post_id
+
+elif args.recursive_type == 'log_sum_exp':
+    init = init_dmax()
+    update = update_log_sum_exp
+    post = post_id
+
+elif args.recursive_type == 'dsum_dmax':
+    init = init_dsum_dmax()
+    update = update_dsum_dmax(args.gamma)
+    post = post_dsum_dmax(args.lam)
+
+elif args.recursive_type == 'min_max':
+    init = init_min_max()
+    update = update_min_max
+    post = post_min_max(args.lam)
+
+elif args.recursive_type == 'mean':
+    init = init_mean()
+    update = update_mean
+    post = post_mean
+
+elif args.recursive_type == 'range':
+    init = init_min_max()
+    update = update_min_max
+    post = post_range
+
+elif args.recursive_type == 'dsum_variance':
+    init = init_dsum_variance()
+    update = update_dsum_variance(args.gamma)
+    post = post_dsum_variance
+
+elif args.recursive_type == 'sharpe':
+    init = init_sharpe()
+    update = update_sharpe
+    post = post_sharpe
+
+
+
 model = TD3(
     "MlpPolicy",
     env,
+
+    init=init,
+    update=update,
+    post=post,
+
     verbose=1,
     seed=args.seed,
     learning_rate=3e-4,
@@ -45,13 +105,12 @@ model = TD3(
     target_noise_clip=0.5,
     buffer_size=1000000,
     learning_starts=10000,
-    recursive_type=args.recursive_type,
     output_number=args.output_number,
 )
 
 
 model.learn(total_timesteps=1000000)
-model.save(f"result_TD3/{args.env_name}/{args.recursive_type}/{args.seed}/TD3_model_{args.recursive_type}_{args.seed}")
+model.save(f"result_TD3_new/{args.env_name}/{args.recursive_type}/{args.seed}/TD3_model_{args.recursive_type}_{args.seed}")
 
 import numpy as np
 

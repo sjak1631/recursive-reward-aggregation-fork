@@ -19,20 +19,6 @@ from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 
 
 class Actor(BasePolicy):
-    """
-    Actor network (policy) for TD3.
-
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param net_arch: Network architecture
-    :param features_extractor: Network to extract features
-        (a CNN when using images, a nn.Flatten() layer otherwise)
-    :param features_dim: Number of features
-    :param activation_fn: Activation function
-    :param normalize_images: Whether to normalize images or not,
-         dividing by 255.0 (True by default)
-    """
-
     def __init__(
         self,
         observation_space: spaces.Space,
@@ -80,33 +66,11 @@ class Actor(BasePolicy):
 
     def _predict(self, observation: PyTorchObs, deterministic: bool = False) -> th.Tensor:
         # Note: the deterministic deterministic parameter is ignored in the case of TD3.
-        #   Predictions are always deterministic.
+        # Predictions are always deterministic.
         return self(observation)
 
 
 class TD3Policy(BasePolicy):
-    """
-    Policy class (with both actor and critic) for TD3.
-
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param lr_schedule: Learning rate schedule (could be constant)
-    :param net_arch: The specification of the policy and value networks.
-    :param activation_fn: Activation function
-    :param features_extractor_class: Features extractor to use.
-    :param features_extractor_kwargs: Keyword arguments
-        to pass to the features extractor.
-    :param normalize_images: Whether to normalize images or not,
-         dividing by 255.0 (True by default)
-    :param optimizer_class: The optimizer to use,
-        ``th.optim.Adam`` by default
-    :param optimizer_kwargs: Additional keyword arguments,
-        excluding the learning rate, to pass to the optimizer
-    :param n_critics: Number of critic networks to create.
-    :param share_features_extractor: Whether to share or not the features extractor
-        between the actor and the critic (this saves computation time)
-    """
-
     actor: Actor
     actor_target: Actor
     critic: ContinuousCritic
@@ -243,16 +207,12 @@ class TD3Policy(BasePolicy):
 
     def _predict(self, observation: PyTorchObs, deterministic: bool = False) -> th.Tensor:
         # Note: the deterministic deterministic parameter is ignored in the case of TD3.
-        #   Predictions are always deterministic.
+        # Predictions are always deterministic.
         return self.actor(observation)
 
     def set_training_mode(self, mode: bool) -> None:
         """
         Put the policy in either training or evaluation mode.
-
-        This affects certain modules, such as batch normalisation and dropout.
-
-        :param mode: if true, set to training mode, else set to evaluation mode
         """
         self.actor.set_training_mode(mode)
         self.critic.set_training_mode(mode)
@@ -263,28 +223,6 @@ MlpPolicy = TD3Policy
 
 
 class CnnPolicy(TD3Policy):
-    """
-    Policy class (with both actor and critic) for TD3.
-
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param lr_schedule: Learning rate schedule (could be constant)
-    :param net_arch: The specification of the policy and value networks.
-    :param activation_fn: Activation function
-    :param features_extractor_class: Features extractor to use.
-    :param features_extractor_kwargs: Keyword arguments
-        to pass to the features extractor.
-    :param normalize_images: Whether to normalize images or not,
-         dividing by 255.0 (True by default)
-    :param optimizer_class: The optimizer to use,
-        ``th.optim.Adam`` by default
-    :param optimizer_kwargs: Additional keyword arguments,
-        excluding the learning rate, to pass to the optimizer
-    :param n_critics: Number of critic networks to create.
-    :param share_features_extractor: Whether to share or not the features extractor
-        between the actor and the critic (this saves computation time)
-    """
-
     def __init__(
         self,
         observation_space: spaces.Space,
@@ -317,28 +255,6 @@ class CnnPolicy(TD3Policy):
 
 
 class MultiInputPolicy(TD3Policy):
-    """
-    Policy class (with both actor and critic) for TD3 to be used with Dict observation spaces.
-
-    :param observation_space: Observation space
-    :param action_space: Action space
-    :param lr_schedule: Learning rate schedule (could be constant)
-    :param net_arch: The specification of the policy and value networks.
-    :param activation_fn: Activation function
-    :param features_extractor_class: Features extractor to use.
-    :param features_extractor_kwargs: Keyword arguments
-        to pass to the features extractor.
-    :param normalize_images: Whether to normalize images or not,
-         dividing by 255.0 (True by default)
-    :param optimizer_class: The optimizer to use,
-        ``th.optim.Adam`` by default
-    :param optimizer_kwargs: Additional keyword arguments,
-        excluding the learning rate, to pass to the optimizer
-    :param n_critics: Number of critic networks to create.
-    :param share_features_extractor: Whether to share or not the features extractor
-        between the actor and the critic (this saves computation time)
-    """
-
     def __init__(
         self,
         observation_space: spaces.Dict,

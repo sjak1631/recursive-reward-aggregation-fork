@@ -39,7 +39,7 @@ echo "output_number: $output_number"
 
 for SEED in "${SEEDS[@]}"; do
     SESSION_NAME="td3_${ENV_NAME}_${recursive_type}_seed${SEED}"
-    LOG_DIR="result_TD3/${FILE_ENV_NAME}/${recursive_type}/${SEED}"
+    LOG_DIR="result_TD3_new/${FILE_ENV_NAME}/${recursive_type}/${SEED}"
     mkdir -p $LOG_DIR
     tmux has-session -t $SESSION_NAME 2>/dev/null
 

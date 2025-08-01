@@ -6,7 +6,6 @@ from typing import Any, Optional, TypeVar, Union
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from torch.masked import logsumexp
 
 from recursive_stable_baselines3.recursive_common.buffers import DictRolloutBuffer, RolloutBuffer, RolloutBuffer_multi_output
 from recursive_stable_baselines3.recursive_common.policies import ActorCriticPolicy, ActorCriticPolicy_multi_output
@@ -21,41 +20,6 @@ SelfOnPolicyAlgorithm = TypeVar("SelfOnPolicyAlgorithm", bound="OnPolicyAlgorith
 SelfOnPolicyAlgorithm_multi_output = TypeVar("SelfOnPolicyAlgorithm_multi_output", bound="OnPolicyAlgorithm_multi_output")
 
 class OnPolicyAlgorithm(BaseAlgorithm):
-    """
-    The base for On-Policy algorithms (ex: A2C/PPO).
-
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: The learning rate, it can be a function
-        of the current progress remaining (from 1 to 0)
-    :param n_steps: The number of steps to run for each environment per update
-        (i.e. batch size is n_steps * n_env where n_env is number of environment copies running in parallel)
-    :param gamma: Discount factor
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator.
-        Equivalent to classic advantage when set to 1.
-    :param ent_coef: Entropy coefficient for the loss calculation
-    :param vf_coef: Value function coefficient for the loss calculation
-    :param max_grad_norm: The maximum value for the gradient clipping
-    :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param rollout_buffer_class: Rollout buffer class to use. If ``None``, it will be automatically selected.
-    :param rollout_buffer_kwargs: Keyword arguments to pass to the rollout buffer on creation.
-    :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
-        the reported success rate, mean episode length, and mean reward over
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param monitor_wrapper: When creating an environment, whether to wrap it
-        or not in a Monitor wrapper.
-    :param policy_kwargs: additional arguments to be passed to the policy on creation
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
-        debug messages
-    :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
-    :param _init_setup_model: Whether or not to build the network at the creation of the instance
-    :param supported_action_spaces: The action spaces supported by the algorithm.
-    """
 
     rollout_buffer: RolloutBuffer
     policy: ActorCriticPolicy
@@ -64,6 +28,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self,
         policy: Union[str, type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
+
+        init,
+        update,
+        post,
+
         learning_rate: Union[float, Schedule],
         n_steps: int,
         gamma: float,
@@ -84,7 +53,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         supported_action_spaces: Optional[tuple[type[spaces.Space], ...]] = None,
-        recursive_type: str = "dsum",
     ):
         super().__init__(
             policy=policy,
@@ -111,7 +79,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer_class = rollout_buffer_class
         self.rollout_buffer_kwargs = rollout_buffer_kwargs or {}
-        self.recursive_type = recursive_type
+
+        self.init = init
+        self.update = update
+        self.post = post
 
         if _init_setup_model:
             self._setup_model()
@@ -146,7 +117,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _maybe_recommend_cpu(self, mlp_class_name: str = "ActorCriticPolicy") -> None:
         """
         Recommend to use CPU only when using A2C/PPO with MlpPolicy.
-
         :param: The name of the class for the default MlpPolicy.
         """
         policy_class_name = self.policy_class.__name__
@@ -170,19 +140,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         rollout_buffer: RolloutBuffer,
         n_rollout_steps: int,
     ) -> bool:
-        """
-        Collect experiences using the current policy and fill a ``RolloutBuffer``.
-        The term rollout here refers to the model-free notion and should not
-        be used with the concept of rollout used in model-based RL or planning.
 
-        :param env: The training environment
-        :param callback: Callback that will be called at each step
-            (and at the beginning and end of the rollout)
-        :param rollout_buffer: Buffer to fill with rollouts
-        :param n_rollout_steps: Number of experiences to collect per environment
-        :return: True if function returned with at least `n_rollout_steps`
-            collected, False if callback terminated rollout prematurely.
-        """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
@@ -248,17 +206,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
                     with th.no_grad():
                         terminal_value = self.policy.predict_taus(terminal_obs)[0]  # type: ignore[arg-type]
-                    if self.recursive_type == "dsum":
-                        rewards[idx] += self.gamma * terminal_value
-                    elif self.recursive_type == "dmax":
-                        rewards[idx] = max(rewards[idx], self.gamma * terminal_value)
-                    elif self.recursive_type == "min":
-                        rewards[idx] = min(rewards[idx], terminal_value)
-                    elif self.recursive_type == "log-sum-exp":
-                        rewards[idx] = logsumexp([rewards[idx], terminal_value])
-                    elif self.recursive_type == "mean":
-                        rewards[idx] = (rewards[idx] + terminal_value * 10) / (10 + 1)
 
+                    rewards[idx] = self.post(self.update(rewards[idx], terminal_value))
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
@@ -277,10 +226,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))  # type: ignore[arg-type]
             taus = self.policy.predict_taus(obs_as_tensor(new_obs, self.device))
 
-        # rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones, recursive_type=self.recursive_type)
-        rollout_buffer.compute_returns_and_advantage_recursive_mc(last_taus=taus, dones=dones, recursive_type=self.recursive_type)
-
-        # rollout_buffer.compute_returns_and_advantage_recursive(last_taus=taus, dones=dones, recursive_type=self.recursive_type)
+        rollout_buffer.compute_returns_and_advantage_recursive_mc(last_taus=taus, dones=dones)
 
         callback.update_locals(locals())
 
@@ -298,8 +244,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _dump_logs(self, iteration: int) -> None:
         """
         Write log.
-
-        :param iteration: Current logging iteration
         """
         assert self.ep_info_buffer is not None
         assert self.ep_success_buffer is not None
@@ -367,41 +311,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
 
 class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
-    """
-    The base for On-Policy algorithms (ex: A2C/PPO).
-
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: The learning rate, it can be a function
-        of the current progress remaining (from 1 to 0)
-    :param n_steps: The number of steps to run for each environment per update
-        (i.e. batch size is n_steps * n_env where n_env is number of environment copies running in parallel)
-    :param gamma: Discount factor
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator.
-        Equivalent to classic advantage when set to 1.
-    :param ent_coef: Entropy coefficient for the loss calculation
-    :param vf_coef: Value function coefficient for the loss calculation
-    :param max_grad_norm: The maximum value for the gradient clipping
-    :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param rollout_buffer_class: Rollout buffer class to use. If ``None``, it will be automatically selected.
-    :param rollout_buffer_kwargs: Keyword arguments to pass to the rollout buffer on creation.
-    :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
-        the reported success rate, mean episode length, and mean reward over
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param monitor_wrapper: When creating an environment, whether to wrap it
-        or not in a Monitor wrapper.
-    :param policy_kwargs: additional arguments to be passed to the policy on creation
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
-        debug messages
-    :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
-    :param _init_setup_model: Whether or not to build the network at the creation of the instance
-    :param supported_action_spaces: The action spaces supported by the algorithm.
-    """
 
     rollout_buffer: RolloutBuffer_multi_output
     policy: ActorCriticPolicy_multi_output
@@ -410,6 +319,11 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
         self,
         policy: Union[str, type[ActorCriticPolicy_multi_output]],
         env: Union[GymEnv, str],
+
+        init,
+        update,
+        post,
+
         learning_rate: Union[float, Schedule],
         n_steps: int,
         gamma: float,
@@ -430,7 +344,6 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         supported_action_spaces: Optional[tuple[type[spaces.Space], ...]] = None,
-        recursive_type: str = "mean_multi_output",
         output_feature_num: int = 1,
     ):
         super().__init__(
@@ -458,8 +371,11 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
         self.max_grad_norm = max_grad_norm
         self.rollout_buffer_class = rollout_buffer_class
         self.rollout_buffer_kwargs = rollout_buffer_kwargs or {}
-        self.recursive_type = recursive_type
         self.output_feature_num = output_feature_num
+
+        self.init = init
+        self.update = update
+        self.post = post
 
         if _init_setup_model:
             self._setup_model()
@@ -475,6 +391,9 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
                 self.rollout_buffer_class = RolloutBuffer_multi_output
 
         self.rollout_buffer = self.rollout_buffer_class(
+            self.init,
+            self.update,
+            self.post,
             self.n_steps,
             self.observation_space,  # type: ignore[arg-type]
             self.action_space,
@@ -519,19 +438,7 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
         rollout_buffer: RolloutBuffer_multi_output,
         n_rollout_steps: int,
     ) -> bool:
-        """
-        Collect experiences using the current policy and fill a ``RolloutBuffer``.
-        The term rollout here refers to the model-free notion and should not
-        be used with the concept of rollout used in model-based RL or planning.
 
-        :param env: The training environment
-        :param callback: Callback that will be called at each step
-            (and at the beginning and end of the rollout)
-        :param rollout_buffer: Buffer to fill with rollouts
-        :param n_rollout_steps: Number of experiences to collect per environment
-        :return: True if function returned with at least `n_rollout_steps`
-            collected, False if callback terminated rollout prematurely.
-        """
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
@@ -569,7 +476,6 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
             new_obs, rewards, dones, infos = env.step(clipped_actions)
-            # print("rewards3", rewards)
 
             self.num_timesteps += env.num_envs
 
@@ -595,48 +501,9 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
                 ):
                     terminal_obs = self.policy.obs_to_tensor(infos[idx]["terminal_observation"])[0]
                     with th.no_grad():
-                        terminal_value = self.policy.predict_taus_multi_output(terminal_obs)[0]  # type: ignore[arg-type]
-                    if self.recursive_type == "sum_range_multi_output":
-                        tau_sum, tau_max, tau_min = terminal_value[0], terminal_value[1], terminal_value[2]
+                        terminal_value = self.policy.predict_taus_multi_output(terminal_obs)[0]
 
-                        # print("tau_sum", tau_sum, "tau_max", tau_max, "tau_min", tau_min)
-                        # print("rewards[idx]", rewards[idx])
-                        tau_sum = rewards[idx] + self.gamma * tau_sum
-                        tau_max = max(rewards[idx], tau_max)
-                        tau_min = min(rewards[idx], tau_min)
-                        rewards[idx] = tau_sum - 0.2 * (tau_max - tau_min)
-                        # print("tau_sum", tau_sum, "tau_max", tau_max, "tau_min", tau_min)
-                        # print("rewards[idx]", rewards[idx])
-                        # rewards[idx] = tau_sum
-
-                    elif self.recursive_type == "sum_variance_multi_output":
-                        tau_sum, tau_sum_square, tau_length = terminal_value[0], terminal_value[1], terminal_value[2]
-                        tau_variance = (tau_sum_square / tau_length) - (tau_sum / tau_length) ** 2
-                        rewards[idx] = self.gamma * tau_sum - 0.2 * tau_variance
-
-                    elif self.recursive_type == "mean_multi_output":
-                        tau_sum, tau_length = terminal_value[0], terminal_value[1]
-                        tau_sum += rewards[idx]
-                        tau_length += 1
-                        rewards[idx] = tau_sum / tau_length
-
-                    elif self.recursive_type == "sharpe_3":
-                        tau_mean, tau_variance, tau_length = terminal_value[0], terminal_value[1], terminal_value[2]
-                        tau_length = th.nn.functional.softplus(tau_length)
-                        tau_length += 1
-                        tau_mean_updated = tau_mean + ((rewards[idx] - tau_mean) / tau_length)
-                        tau_variance = tau_variance + ((rewards[idx] - tau_mean_updated) * (rewards[idx] - tau_mean) - tau_variance) / tau_length
-                        tau_variance = th.nn.functional.softplus(tau_variance)
-                        rewards[idx] = tau_mean_updated / th.sqrt(tau_variance  + 1e-8)
-
-                    elif self.recursive_type == "sharpe_3_multi_env":
-                        tau_mean, tau_variance, tau_length = terminal_value[0], terminal_value[1], terminal_value[2]
-                        tau_length = th.nn.functional.softplus(tau_length)
-                        tau_length += 1
-                        tau_mean_updated = tau_mean + ((rewards[idx] - tau_mean) / tau_length)
-                        tau_variance = tau_variance + ((rewards[idx] - tau_mean_updated) * (rewards[idx] - tau_mean) - tau_variance) / tau_length
-                        tau_variance = th.nn.functional.softplus(tau_variance)
-                        rewards[idx] = tau_mean_updated / th.sqrt(tau_variance  + 1e-8)
+                    rewards[idx] = self.post(self.update(rewards[idx], terminal_value))
 
             rollout_buffer.add(
                 self._last_obs,  # type: ignore[arg-type]
@@ -653,14 +520,9 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
             # Compute value for the last timestep
             taus = self.policy.predict_taus_multi_output(obs_as_tensor(new_obs, self.device))
 
-        # rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones, recursive_type=self.recursive_type)
-        rollout_buffer.compute_returns_and_advantage_recursive_mc(last_taus=taus, dones=dones, recursive_type=self.recursive_type)
-        # print("collected!!!!!!!")
-
+        rollout_buffer.compute_returns_and_advantage_recursive_mc(last_taus=taus, dones=dones)
         callback.update_locals(locals())
-
         callback.on_rollout_end()
-
         return True
 
     def train(self) -> None:
@@ -673,8 +535,6 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
     def _dump_logs(self, iteration: int) -> None:
         """
         Write log.
-
-        :param iteration: Current logging iteration
         """
         assert self.ep_info_buffer is not None
         assert self.ep_success_buffer is not None
@@ -712,7 +572,6 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
         )
 
         callback.on_training_start(locals(), globals())
-
         assert self.env is not None
 
         while self.num_timesteps < total_timesteps:
@@ -732,7 +591,6 @@ class OnPolicyAlgorithm_multi_output(BaseAlgorithm):
             self.train()
 
         callback.on_training_end()
-
         return self
 
     def _get_torch_save_params(self) -> tuple[list[str], list[str]]:

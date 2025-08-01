@@ -9,11 +9,12 @@ import torch as th
 import numpy as np
 import empyrical as ep
 
-# sys.path.insert(0, "/workspace/stable-baselines3")
 sys.path.insert(0, os.path.abspath("."))
 sys.path.insert(0, os.path.abspath(".."))
 
 from recursive_stable_baselines3 import Recursive_PPO_multi_output
+from recursive_stable_baselines3.recursive_common.statistics_portfolio import init_sharpe, post_sharpe, update_sharpe
+
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.env_util import make_vec_env
@@ -24,12 +25,15 @@ from fin_env import FinEnv, FinEnv_resursive
 from fin_utils import find_closest_date_before, find_closest_date_after, str_to_bool
 
 
+init = init_sharpe()
+update = update_sharpe
+post = post_sharpe
+output_feature_num = 3
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
         if not os.path.exists("./" + directory):
             os.makedirs("./" + directory)
-
 
 def main():
     parser = argparse.ArgumentParser(description="Runner Parser",
@@ -114,7 +118,6 @@ def main():
     all_R_eval = []
     all_R_test = []
 
-
     start_step = 0
     last_best_model_path = None
 
@@ -166,8 +169,6 @@ def main():
                         }
             
             to_add=f"_{seed=}, {start_date=}, {end_date=}, {step=}"
-            
-            
 
             eval_env_kwargs_0 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_0["start_date"] = find_closest_date_after(start_date_list_train[step], date_list) 
@@ -175,7 +176,6 @@ def main():
             eval_env_kwargs_0["eval"] = True
             eval_env_0 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_0)
-            # eval_env_0 = FinEnv_resursive(**eval_env_kwargs_0)
             eval_callback_0 = OwnEvalCallback(eval_env_0, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
                                         deterministic=deterministic_eval, render=False, to_add= "_same" + to_add, verbose=verbose,
@@ -187,7 +187,6 @@ def main():
             eval_env_kwargs_1["eval"] = True
             eval_env_1 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_1)
-            # eval_env_1 = FinEnv_resursive(**eval_env_kwargs_1)
 
             eval_callback_1 = OwnEvalCallback(eval_env_1, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
@@ -200,16 +199,21 @@ def main():
             eval_env_kwargs_2["eval"] = True
             eval_env_2 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_2)
-            # eval_env_2 = FinEnv_resursive(**eval_env_kwargs_2)
             eval_callback_2 = OwnEvalCallback(eval_env_2, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
                                         deterministic=deterministic_eval, render=False, to_add= "_test" + to_add, verbose=verbose,
                                         tens_name=f"test_{step}",)
 
             vec_env = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv, env_kwargs=env_kwargs)
-            # vec_env = FinEnv_resursive(**env_kwargs)
 
-            model = Recursive_PPO_multi_output("MlpPolicy_multi_output", vec_env, tensorboard_log=tensorboard_dir_log,
+            model = Recursive_PPO_multi_output("MlpPolicy_multi_output",
+                        vec_env,
+
+                        init = init,
+                        update = update,
+                        post = post,
+
+                        tensorboard_log = tensorboard_dir_log,
                         learning_rate = copy.deepcopy(lr_schedule),
                         n_steps = n_steps,
                         batch_size = batch_size,
@@ -219,8 +223,7 @@ def main():
                         clip_range = clip_range,
                         policy_kwargs = policy_kwargs,
                         seed = seed,
-                        recursive_type="sharpe_3_multi_env",
-                        output_feature_num=3,
+                        output_feature_num=output_feature_num,
                                                )
             
             if last_best_model_path:
@@ -235,7 +238,7 @@ def main():
             eval_env_2.close()
             vec_env.close()
 
-            # Eval results -------------------------------------------------------------------------------------------------------
+            # Eval results
             model.set_parameters(os.path.join(best_model_save_path, "best_model" + "_same" + to_add))
             eval_env_0 = FinEnv_resursive(**eval_env_kwargs_0)
             _, _, R_same = own_eval_policy(
@@ -245,10 +248,6 @@ def main():
             )
             sharpe_same = ep.sharpe_ratio(R_same)
             sharpe_same = np.nan_to_num(sharpe_same, nan=0.0)
-
-            # K = np.sqrt(len(all_R_same) / (len(all_R_same) - 1))
-            # if not np.isclose(sharpe_same, np.mean(all_R_same) / (np.std(all_R_same) * K) * np.sqrt(252)):
-            #     print(f"ERROR, {sharpe_same=}, {np.mean(all_R_same) / (np.std(all_R_same) * K) * np.sqrt(252)=}", flush=True)
 
             model.set_parameters(os.path.join(best_model_save_path, "best_model" + "_eval" + to_add))
             eval_env_1 = FinEnv_resursive(**eval_env_kwargs_1)

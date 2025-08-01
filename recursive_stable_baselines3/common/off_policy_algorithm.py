@@ -27,52 +27,6 @@ SelfOffPolicyAlgorithm = TypeVar("SelfOffPolicyAlgorithm", bound="OffPolicyAlgor
 class OffPolicyAlgorithm(BaseAlgorithm):
     """
     The base for Off-Policy algorithms (ex: SAC/TD3)
-
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from
-                (if registered in Gym, can be str. Can be None for loading trained models)
-    :param learning_rate: learning rate for the optimizer,
-        it can be a function of the current progress remaining (from 1 to 0)
-    :param buffer_size: size of the replay buffer
-    :param learning_starts: how many steps of the model to collect transitions for before learning starts
-    :param batch_size: Minibatch size for each gradient update
-    :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
-    :param gamma: the discount factor
-    :param train_freq: Update the model every ``train_freq`` steps. Alternatively pass a tuple of frequency and unit
-        like ``(5, "step")`` or ``(2, "episode")``.
-    :param gradient_steps: How many gradient steps to do after each rollout (see ``train_freq``)
-        Set to ``-1`` means to do as many gradient steps as steps done in the environment
-        during the rollout.
-    :param action_noise: the action noise type (None by default), this can help
-        for hard exploration problem. Cf common.noise for the different action noise type.
-    :param replay_buffer_class: Replay buffer class to use (for instance ``HerReplayBuffer``).
-        If ``None``, it will be automatically selected.
-    :param replay_buffer_kwargs: Keyword arguments to pass to the replay buffer on creation.
-    :param optimize_memory_usage: Enable a memory efficient variant of the replay buffer
-        at a cost of more complexity.
-        See https://github.com/DLR-RM/stable-baselines3/issues/37#issuecomment-637501195
-    :param policy_kwargs: Additional arguments to be passed to the policy on creation
-    :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
-        the reported success rate, mean episode length, and mean reward over
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
-        debug messages
-    :param device: Device on which the code should run.
-        By default, it will try to use a Cuda compatible device and fallback to cpu
-        if it is not possible.
-    :param support_multi_env: Whether the algorithm supports training
-        with multiple environments (as in A2C)
-    :param monitor_wrapper: When creating an environment, whether to wrap it
-        or not in a Monitor wrapper.
-    :param seed: Seed for the pseudo random generators
-    :param use_sde: Whether to use State Dependent Exploration (SDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param use_sde_at_warmup: Whether to use gSDE instead of uniform sampling
-        during the warm up phase (before learning starts)
-    :param sde_support: Whether the model support gSDE or not
-    :param supported_action_spaces: The action spaces supported by the algorithm.
     """
 
     actor: th.nn.Module
@@ -222,9 +176,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def save_replay_buffer(self, path: Union[str, pathlib.Path, io.BufferedIOBase]) -> None:
         """
         Save the replay buffer as a pickle file.
-
-        :param path: Path to the file where the replay buffer should be saved.
-            if path is a str or pathlib.Path, the path is automatically created if necessary.
         """
         assert self.replay_buffer is not None, "The replay buffer is not defined"
         save_to_pkl(path, self.replay_buffer, self.verbose)
@@ -236,12 +187,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     ) -> None:
         """
         Load a replay buffer from a pickle file.
-
-        :param path: Path to the pickled replay buffer.
-        :param truncate_last_traj: When using ``HerReplayBuffer`` with online sampling:
-            If set to ``True``, we assume that the last trajectory in the replay buffer was finished
-            (and truncate it).
-            If set to ``False``, we assume that we continue the same trajectory (same episode).
         """
         self.replay_buffer = load_from_pkl(path, self.verbose)
         assert isinstance(self.replay_buffer, ReplayBuffer), "The replay buffer must inherit from ReplayBuffer class"
@@ -272,9 +217,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         """
         cf `BaseAlgorithm`.
         """
-        # Prevent continuity issue by truncating trajectory
-        # when using memory efficient replay buffer
-        # see https://github.com/DLR-RM/stable-baselines3/issues/46
 
         replay_buffer = self.replay_buffer
 
@@ -380,15 +322,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         This is either done by sampling the probability distribution of the policy,
         or sampling a random action (from a uniform distribution over the action space)
         or by adding noise to the deterministic output.
-
-        :param action_noise: Action noise that will be used for exploration
-            Required for deterministic policy (e.g. TD3). This can also be used
-            in addition to the stochastic policy for SAC.
-        :param learning_starts: Number of steps before learning for the warm-up phase.
-        :param n_envs:
-        :return: action to take in the environment
-            and scaled action that will be stored in the replay buffer.
-            The two differs when the action space is not normalized (bounds are not [-1, 1]).
         """
         # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
@@ -463,15 +396,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         Store transition in the replay buffer.
         We store the normalized action and the unnormalized observation.
         It also handles terminal observations (because VecEnv resets automatically).
-
-        :param replay_buffer: Replay buffer object where to store the transition.
-        :param buffer_action: normalized action
-        :param new_obs: next observation in the current episode
-            or first observation of the episode (when dones is True)
-        :param reward: reward for the current transition
-        :param dones: Termination signal
-        :param infos: List of additional information about the transition.
-            It may contain the terminal observations and information about timeout.
         """
         # Store only the unnormalized version
         if self._vec_normalize_env is not None:
@@ -527,22 +451,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     ) -> RolloutReturn:
         """
         Collect experiences and store them into a ``ReplayBuffer``.
-
-        :param env: The training environment
-        :param callback: Callback that will be called at each step
-            (and at the beginning and end of the rollout)
-        :param train_freq: How much experience to collect
-            by doing rollouts of current policy.
-            Either ``TrainFreq(<n>, TrainFrequencyUnit.STEP)``
-            or ``TrainFreq(<n>, TrainFrequencyUnit.EPISODE)``
-            with ``<n>`` being an integer greater than 0.
-        :param action_noise: Action noise that will be used for exploration
-            Required for deterministic policy (e.g. TD3). This can also be used
-            in addition to the stochastic policy for SAC.
-        :param learning_starts: Number of steps before learning for the warm-up phase.
-        :param replay_buffer:
-        :param log_interval: Log data every ``log_interval`` episodes
-        :return:
         """
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
@@ -591,7 +499,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             # For DQN, check if the target network should be updated
             # and update the exploration schedule
             # For SAC/TD3, the update is dones as the same time as the gradient update
-            # see https://github.com/hill-a/stable-baselines/issues/900
             self._on_step()
 
             for idx, done in enumerate(dones):

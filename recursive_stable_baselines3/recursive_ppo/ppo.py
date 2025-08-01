@@ -11,67 +11,13 @@ from recursive_stable_baselines3.recursive_common.on_policy_algorithm import OnP
 from recursive_stable_baselines3.recursive_common.policies import ActorCriticCnnPolicy, ActorCriticPolicy, BasePolicy, \
     MultiInputActorCriticPolicy, ActorCriticPolicy_multi_output
 from recursive_stable_baselines3.recursive_common.type_aliases import GymEnv, MaybeCallback, Schedule
-from recursive_stable_baselines3.recursive_common.utils import explained_variance, explained_variance_multi_output, get_schedule_fn
+from recursive_stable_baselines3.recursive_common.utils import explained_variance, get_schedule_fn
 
 SelfRecursive_PPO = TypeVar("SelfRecursive_PPO", bound="Recursive_PPO")
 SelfRecursive_PPO_multi_output = TypeVar("SelfRecursive_PPO_multi_output", bound="Recursive_PPO_multi_output")
 
 
 class Recursive_PPO(OnPolicyAlgorithm):
-    """
-    Proximal Policy Optimization algorithm (PPO) (clip version)
-
-    Paper: https://arxiv.org/abs/1707.06347
-    Code: This implementation borrows code from OpenAI Spinning Up (https://github.com/openai/spinningup/)
-    https://github.com/ikostrikov/pytorch-a2c-ppo-acktr-gail and
-    Stable Baselines (PPO2 from https://github.com/hill-a/stable-baselines)
-
-    Introduction to PPO: https://spinningup.openai.com/en/latest/algorithms/ppo.html
-
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: The learning rate, it can be a function
-        of the current progress remaining (from 1 to 0)
-    :param n_steps: The number of steps to run for each environment per update
-        (i.e. rollout buffer size is n_steps * n_envs where n_envs is number of environment copies running in parallel)
-        NOTE: n_steps * n_envs must be greater than 1 (because of the advantage normalization)
-        See https://github.com/pytorch/pytorch/issues/29372
-    :param batch_size: Minibatch size
-    :param n_epochs: Number of epoch when optimizing the surrogate loss
-    :param gamma: Discount factor
-    :param gae_lambda: Factor for trade-off of bias vs variance for Generalized Advantage Estimator
-    :param clip_range: Clipping parameter, it can be a function of the current progress
-        remaining (from 1 to 0).
-    :param clip_range_vf: Clipping parameter for the value function,
-        it can be a function of the current progress remaining (from 1 to 0).
-        This is a parameter specific to the OpenAI implementation. If None is passed (default),
-        no clipping will be done on the value function.
-        IMPORTANT: this clipping depends on the reward scaling.
-    :param normalize_advantage: Whether to normalize or not the advantage
-    :param ent_coef: Entropy coefficient for the loss calculation
-    :param vf_coef: Value function coefficient for the loss calculation
-    :param max_grad_norm: The maximum value for the gradient clipping
-    :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param rollout_buffer_class: Rollout buffer class to use. If ``None``, it will be automatically selected.
-    :param rollout_buffer_kwargs: Keyword arguments to pass to the rollout buffer on creation
-    :param target_kl: Limit the KL divergence between updates,
-        because the clipping is not enough to prevent large update
-        see issue #213 (cf https://github.com/hill-a/stable-baselines/issues/213)
-        By default, there is no limit on the kl div.
-    :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
-        the reported success rate, mean episode length, and mean reward over
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param policy_kwargs: additional arguments to be passed to the policy on creation. See :ref:`ppo_policies`
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
-        debug messages
-    :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
-    :param _init_setup_model: Whether or not to build the network at the creation of the instance
-    """
 
     policy_aliases: ClassVar[dict[str, type[BasePolicy]]] = {
         "MlpPolicy": ActorCriticPolicy,
@@ -83,6 +29,11 @@ class Recursive_PPO(OnPolicyAlgorithm):
         self,
         policy: Union[str, type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
+
+        init,
+        update,
+        post,
+
         learning_rate: Union[float, Schedule] = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -107,7 +58,6 @@ class Recursive_PPO(OnPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
-        recursive_type: str = "sum",
     ):
         super().__init__(
             policy,
@@ -130,7 +80,6 @@ class Recursive_PPO(OnPolicyAlgorithm):
             device=device,
             seed=seed,
             _init_setup_model=False,
-            recursive_type=recursive_type,
             supported_action_spaces=(
                 spaces.Box,
                 spaces.Discrete,
@@ -170,6 +119,10 @@ class Recursive_PPO(OnPolicyAlgorithm):
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
+
+        self.init = init
+        self.update = update
+        self.post = post
 
         if _init_setup_model:
             self._setup_model()
@@ -321,7 +274,6 @@ class Recursive_PPO(OnPolicyAlgorithm):
             progress_bar=progress_bar,
         )
 
-
 class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
 
     policy_aliases: ClassVar[dict[str, type[BasePolicy]]] = {
@@ -335,6 +287,11 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
         self,
         policy: Union[str, type[ActorCriticPolicy_multi_output]],
         env: Union[GymEnv, str],
+
+        init,
+        update,
+        post,
+
         learning_rate: Union[float, Schedule] = 3e-4,
         n_steps: int = 2048,
         batch_size: int = 64,
@@ -359,12 +316,16 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
-        recursive_type: str = "mean_multi_output",
         output_feature_num: int = 1,
     ):
         super().__init__(
             policy,
             env,
+
+            init=init,
+            update=update,
+            post=post,
+
             learning_rate=learning_rate,
             n_steps=n_steps,
             gamma=gamma,
@@ -383,7 +344,6 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
             device=device,
             seed=seed,
             _init_setup_model=False,
-            recursive_type=recursive_type,
             output_feature_num=output_feature_num,
             supported_action_spaces=(
                 spaces.Box,
@@ -424,6 +384,10 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
         self.clip_range_vf = clip_range_vf
         self.normalize_advantage = normalize_advantage
         self.target_kl = target_kl
+
+        self.init = init
+        self.update = update
+        self.post = post
 
         if _init_setup_model:
             self._setup_model()
@@ -468,11 +432,7 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
                     # Convert discrete action from float to long
                     actions = rollout_data.actions.long().flatten()
 
-                # print("actions", actions)
-                # print("rollout_data.observations", rollout_data.observations)
-
                 values, log_prob, entropy = self.policy.evaluate_actions_multi_output(rollout_data.observations, actions)
-                # print("values", values.shape)
 
                 # Normalize advantage
                 advantages = rollout_data.advantages
@@ -493,61 +453,7 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
                 clip_fraction = th.mean((th.abs(ratio - 1) > clip_range).float()).item()
                 clip_fractions.append(clip_fraction)
 
-
-                if self.recursive_type == "mean_multi_output":
-                    values_sum, values_length = values[..., 0], values[..., 1]
-                    values_pred_sum = values_sum.flatten()
-                    values_pred_length = values_length.flatten()
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred_sum / values_pred_length)
-
-                elif self.recursive_type == "range_output":
-                    values_max, values_min = values[..., 0], values[..., 1]
-                    values_pred_max = values_max.flatten()
-                    values_pred_min = values_min.flatten()
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred_max - values_pred_min)
-
-                elif self.recursive_type == "p-mean_output":
-                    values_pred = values[..., 0]
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred)
-
-                elif self.recursive_type == "sum_variance_multi_output":
-                    values_sum, values_sum_square, values_length = values[..., 0], values[..., 1], values[..., 2]
-                    values_variance = (values_sum_square / values_length) - (values_sum / values_length) ** 2
-                    values_pred = values_sum - 0.2 * values_variance
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred)
-
-                elif self.recursive_type == "sum_range_multi_output":
-                    values_sum, values_max, values_min= values[..., 0], values[..., 1], values[..., 2]
-                    values_range = values_max - values_min
-                    value_loss = F.mse_loss(rollout_data.returns, values_sum - 0.2 * values_range)
-
-                elif self.recursive_type == "sharpe_3":
-                    values_mean, values_variance, values_length = values[..., 0], values[..., 1], values[..., 2]
-                    # print("values_mean", values_mean)
-                    # print("values_variance", values_variance)
-                    values_variance = th.nn.functional.softplus(values_variance)
-                    values_pred_sharpe = values_mean / th.sqrt(values_variance + 1e-8)
-                    # print("rollout_data.returns", rollout_data.returns)
-                    # print("values_pred_sharpe", values_pred_sharpe)
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred_sharpe)
-
-                elif self.recursive_type == "sharpe_3_multi_env":
-                    values_mean, values_variance, values_length = values[..., 0], values[..., 1], values[..., 2]
-                    # print("values_mean", values_mean)
-                    # print("values_variance", values_variance)
-                    values_variance = th.nn.functional.softplus(values_variance)
-                    values_pred_sharpe = values_mean / th.sqrt(values_variance + 1e-8)
-                    # print("rollout_data.returns", rollout_data.returns)
-                    # print("values_pred_sharpe", values_pred_sharpe)
-                    value_loss = F.mse_loss(rollout_data.returns, values_pred_sharpe)
-
-                # # print("(values_pred_sum / values_pred_length).shape", (values_pred_sum / values_pred_length).shape)
-                # # print("rollout_data.returns.shape", rollout_data.returns.shape)
-                #
-                # # Value loss using the TD(gae_lambda) target
-                #     value_loss = F.mse_loss(rollout_data.returns, values_pred_sum/values_pred_length)
-
-                # print("value_loss", value_loss, "rollout_data.returns", rollout_data.returns, "values_sum", values_sum)
+                value_loss = F.mse_loss(rollout_data.returns, self.post(values))
                 value_losses.append(value_loss.item())
 
                 # Entropy loss favor exploration
@@ -560,9 +466,6 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
                 entropy_losses.append(entropy_loss.item())
 
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
-                # print("policy_loss", policy_loss)
-                # print("value_loss", value_loss)
-                # print("entropy_loss", entropy_loss)
 
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
@@ -575,36 +478,16 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
                         print(f"Early stopping at step {epoch} due to reaching max kl: {approx_kl_div:.2f}")
                     break
 
-                # for name, param in self.policy.named_parameters():
-                #     if param.grad is not None:
-                #         print(f"Gradient of {name}: {param.grad}")
-                #     else:
-                #         print(f"{name} has no gradient")
-                # for name, param in self.policy.named_parameters():
-                #     print(f"{name} requires_grad: {param.requires_grad}")
-
                 # Optimization step
-
-                # print("loss1", loss)
                 self.policy.optimizer.zero_grad()
                 loss.backward()
                 # Clip grad norm
                 th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
-                # print("loss2", loss)
-
-                # for name, param in self.policy.named_parameters():
-                #     if param.grad is not None:
-                #         print(f"Gradient of {name}: {param.grad}")
-                #     else:
-                #         print(f"{name} has no gradient")
-
             self._n_updates += 1
             if not continue_training:
                 break
-
-        explained_var = explained_variance_multi_output(self.rollout_buffer.taus, self.rollout_buffer.returns.flatten(), self.recursive_type)
 
         # Logs
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
@@ -613,7 +496,6 @@ class Recursive_PPO_multi_output(OnPolicyAlgorithm_multi_output):
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
-        self.logger.record("train/explained_variance", explained_var)
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
 
