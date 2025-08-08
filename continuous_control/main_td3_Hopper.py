@@ -9,7 +9,7 @@ import gymnasium as gym
 import numpy as np
 
 from recursive_stable_baselines3 import TD3
-from recursive_stable_baselines3.recursive_common.statistics import *
+import recursive_stable_baselines3.recursive_common.statistics as stats
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
@@ -39,54 +39,54 @@ action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n
 
 
 if args.recursive_type == 'dsum':
-    init = init_dsum()
-    update = update_dsum(args.gamma)
-    post = post_id
+    init = stats.init_dsum()
+    update = stats.update_dsum(args.gamma)
+    post = stats.post_id
 
 elif args.recursive_type == 'dmax':
-    init = init_dmax()
-    update = update_dmax(args.gamma)
-    post = post_id
+    init = stats.init_dmax()
+    update = stats.update_dmax(args.gamma)
+    post = stats.post_id
 
 elif args.recursive_type == 'min':
-    init = init_min()
-    update = update_min
-    post = post_id
+    init = stats.init_min()
+    update = stats.update_min
+    post = stats.post_id
 
 elif args.recursive_type == 'log_sum_exp':
-    init = init_dmax()
-    update = update_log_sum_exp
-    post = post_id
+    init = stats.init_dmax()
+    update = stats.update_log_sum_exp
+    post = stats.post_id
 
 elif args.recursive_type == 'dsum_dmax':
-    init = init_dsum()
-    update = update_dsum_dmax(args.gamma)
-    post = post_dsum_dmax(args.lam)
+    init = stats.init_dsum()
+    update = stats.update_dsum_dmax(args.gamma)
+    post = stats.post_dsum_dmax(args.lam)
 
 elif args.recursive_type == 'min_max':
-    init = init_min_max()
-    update = update_min_max
-    post = post_min_max(args.lam)
+    init = stats.init_min_max()
+    update = stats.update_min_max
+    post = stats.post_min_max(args.lam)
 
 elif args.recursive_type == 'mean':
-    init = init_mean()
-    update = update_mean
-    post = post_mean
+    init = stats.init_mean()
+    update = stats.update_mean
+    post = stats.post_mean
 
 elif args.recursive_type == 'range':
-    init = init_min_max()
-    update = update_min_max
-    post = post_range
+    init = stats.init_min_max()
+    update = stats.update_min_max
+    post = stats.post_range
 
 elif args.recursive_type == 'dsum_variance':
-    init = init_dsum_variance()
-    update = update_dsum_variance(args.gamma)
-    post = post_dsum_variance
+    init = stats.init_dsum_variance()
+    update = stats.update_dsum_variance(args.gamma)
+    post = stats.post_dsum_variance
 
 elif args.recursive_type == 'sharpe':
-    init = init_sharpe()
-    update = update_sharpe
-    post = post_sharpe
+    init = stats.init_sharpe()
+    update = stats.update_sharpe
+    post = stats.post_sharpe
 
 
 
