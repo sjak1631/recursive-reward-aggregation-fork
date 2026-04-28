@@ -9,8 +9,11 @@ import torch as th
 import numpy as np
 import empyrical as ep
 
-sys.path.insert(0, os.path.abspath("."))
-sys.path.insert(0, os.path.abspath(".."))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(BASE_DIR)
+
+sys.path.insert(0, BASE_DIR)
+sys.path.insert(0, REPO_ROOT)
 
 from recursive_stable_baselines3 import Recursive_PPO_multi_output
 from recursive_stable_baselines3.recursive_common.statistics_portfolio import init_sharpe, post_sharpe, update_sharpe
@@ -32,8 +35,8 @@ output_feature_num = 3
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
-        if not os.path.exists("./" + directory):
-            os.makedirs("./" + directory)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Runner Parser",
@@ -121,7 +124,7 @@ def main():
     start_step = 0
     last_best_model_path = None
 
-    data_folder = "./preproc_data/"
+    data_folder = os.path.join(BASE_DIR, "preproc_data") + os.sep
     with open(data_folder + "date_list.txt", "r") as f:
         date_list = f.read().splitlines()
 
