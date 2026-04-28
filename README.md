@@ -54,40 +54,7 @@ This can resolve version conflicts or compatibility issues with certain dependen
 
 ## Experiments
 
-### 1. Grid-World Environment
-
-See this [notebook](grid/grid.ipynb).
-
-### 2. Wind-World Environment
-
-See this [notebook](wind/wind.ipynb).
-
-### 3. Continuous Control Experiment
-
-Partially built upon Stable-Baselines3.
-
-You can run the continuous control experiments using the provided shell script.
-
-```sh
-cd continuous_control
-bash run_td3.sh [SEED] [ENV] [RECURSIVE_TYPE]
-```
-
-`SEED` (optional): Random seed for training. Default: `42`.
-
-`ENV` (optional): OpenAI Gym environment name. Default: `Ant-v5`. Available options: `Ant-v5`, `Walker2d-v5`, `LunarLanderContinuous-v3`.
-
-`RECURSIVE_TYPE` (optional): Type of recursive aggregation to use in training. Default: `dsum`. Available options: `dsum`, `dmax`, `min`, `dsum_dmax`, `dsum_variance`.
-
-- **dsum**: *Discounted Sum*, computed with discount factor $\gamma = 0.99$.
-- **dmax**: *Discounted Max*, computed with discount factor $\gamma = 0.99$.
-- **min**: *Minimum* reward.
-- **dsum_dmax**: A combination of *Discounted Sum* and *Discounted Max*, both using $\gamma = 0.99$.
-- **dsum_variance**: *Discounted Sum* minus the reward *Variance*, computed with discount factor $\gamma = 0.99$.
-
-If no arguments are provided, the script will use the default values.
-
-### 4. Portfolio Experiment
+### Portfolio Experiment
 
 This script runs the portfolio experiment using pre-defined market environments and settings.
 
@@ -95,23 +62,3 @@ This script runs the portfolio experiment using pre-defined market environments 
 cd portfolio
 ./run_portfolio.sh
 ```
-
-## Videos of Continuous Control Experiments
-
-### Lunar Lander Continuous
-
-| dsum                                                            | dmax | min | dsum + dmax | dsum - var |
-|-----------------------------------------------------------------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Lunar_dsum.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dmax.gif" width="150"> | <img src="continuous_control/gifs/Lunar_min.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Lunar_dsum_var.gif" width="150"> |
-
-### Hopper
-
-| dsum | dmax | min | dsum + dmax | dsum - var |
-|------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Hopper_dsum.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dmax.gif" width="150"> | <img src="continuous_control/gifs/Hopper_min.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Hopper_dsum_var.gif" width="150"> |
-
-### Ant
-
-| dsum | dmax | min | dsum + dmax | dsum - var |
-|------|------|-----|-------------|------------|
-| <img src="continuous_control/gifs/Ant_dsum.gif" width="150"> | <img src="continuous_control/gifs/Ant_dmax.gif" width="150"> | <img src="continuous_control/gifs/Ant_min.gif" width="150"> | <img src="continuous_control/gifs/Ant_dsum_dmax.gif" width="150"> | <img src="continuous_control/gifs/Ant_dsum_var.gif" width="150"> |
