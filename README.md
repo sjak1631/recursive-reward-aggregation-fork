@@ -18,10 +18,17 @@ docker build -t rra_image . -f Dockerfile
 ### Step 2: Run the Docker container
 
 ```sh
-docker run -dit -p 8888:22 --mount type=bind,source=/path/to/your/RRA,destination=/workspace/RRA --name rra_container -m 16g --gpus all rra_image /bin/bash
+docker run -dit -p 8888:22 --mount type=bind,source="$(cd .. && pwd)",destination=/workspace/RRA --name rra_container -m 16g --gpus all rra_image /bin/bash
 ```
 
-Replace `/path/to/your/RRA` with the absolute path to your local RRA directory.
+When you run this command from the `docker/` directory, it automatically mounts the repository root one level up.
+
+For CPU-only runs, remove `--gpus all`.
+
+```sh
+docker run -dit -p 8888:22 --mount type=bind,source="$(cd .. && pwd)",destination=/workspace/RRA --name rra_container -m 16g rra_image /bin/bash
+```
+
 
 ### Step 3: Enter the running container
 
@@ -36,7 +43,7 @@ docker exec -it rra_container bash
 To run the portfolio experiment inside the Docker container, you will also need to manually install:
 
 ```sh
-pip install torch stable-baselines3 empyrical tensorboard distrax IPython
+pip install torch stable-baselines3 empyrical tensorboard
 ```
 
 Make sure to run this inside the container after building it.
