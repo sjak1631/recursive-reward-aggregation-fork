@@ -2,6 +2,7 @@ import scipy
 import numpy as np
 import gymnasium as gym
 
+# monte carlo
 class FinEnv(gym.Env):
     def __init__(self, start_date, end_date, data_folder, 
                  adapt_state, adapt_reward,

@@ -57,16 +57,19 @@ def main():
     print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}", flush=True)
 
 
+    # 5years
     start_date_list_train = ["2006-01-01", "2007-01-01", "2008-01-01", "2009-01-01", "2010-01-01", 
                     "2011-01-01", "2012-01-01", "2013-01-01", "2014-01-01", "2015-01-01",]
     end_date_list_train = ["2010-12-31", "2011-12-31", "2012-12-31", "2013-12-31", "2014-12-31",
                     "2015-12-31", "2016-12-31", "2017-12-31", "2018-12-31", "2019-12-31",]
 
+    # 1year
     start_date_list_eval = ["2011-01-01", "2012-01-01", "2013-01-01", "2014-01-01", "2015-01-01",
                             "2016-01-01", "2017-01-01", "2018-01-01", "2019-01-01", "2020-01-01",]
     end_date_list_eval = ["2011-12-31", "2012-12-31", "2013-12-31", "2014-12-31", "2015-12-31",
                             "2016-12-31", "2017-12-31", "2018-12-31", "2019-12-31", "2020-12-31"]
 
+    # 1year
     start_date_list_test = ["2012-01-01", "2013-01-01", "2014-01-01", "2015-01-01", "2016-01-01",
                             "2017-01-01", "2018-01-01", "2019-01-01", "2020-01-01", "2021-01-01",]
     end_date_list_test = ["2012-12-31", "2013-12-31", "2014-12-31", "2015-12-31", "2016-12-31",
@@ -128,6 +131,7 @@ def main():
     with open(data_folder + "date_list.txt", "r") as f:
         date_list = f.read().splitlines()
 
+    #ステップは1step = 5year train,1year eval,1year testを1年ずつスライドさせた10step
     for step in range(start_step, len(start_date_list_train)):
         best_model_save_path = os.path.join(log_dir, f"best_model_{step}")
         tensorboard_dir_log = os.path.join(tensorboard_dir, f"tensorboard_{step}")
@@ -141,6 +145,7 @@ def main():
         all_R_eval_step = []
         all_R_test_step = []
 
+        # seed値ごとに環境+モデルのセットを生成
         for seed in seeds:
             seed = int(seed)
             th.manual_seed(seed)
@@ -173,6 +178,7 @@ def main():
             
             to_add=f"_{seed=}, {start_date=}, {end_date=}, {step=}"
 
+            # same (training)
             eval_env_kwargs_0 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_0["start_date"] = find_closest_date_after(start_date_list_train[step], date_list) 
             eval_env_kwargs_0["end_date"] = find_closest_date_before(end_date_list_train[step], date_list)
@@ -184,6 +190,7 @@ def main():
                                         deterministic=deterministic_eval, render=False, to_add= "_same" + to_add, verbose=verbose,
                                         tens_name=f"same_{step}",)
 
+            # eval (model selection)
             eval_env_kwargs_1 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_1["start_date"] = find_closest_date_after(start_date_list_eval[step], date_list) 
             eval_env_kwargs_1["end_date"] = find_closest_date_before(end_date_list_eval[step], date_list)
@@ -196,6 +203,7 @@ def main():
                                         deterministic=deterministic_eval, render=False, to_add="_eval" + to_add, verbose=verbose,
                                         tens_name=f"eval_{step}",)
 
+            # test(本来はここでtestはいらないはずだけど、モデル選択に使われなかったモデルについても性能をログで残せる)
             eval_env_kwargs_2 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_2["start_date"] = find_closest_date_after(start_date_list_test[step], date_list) 
             eval_env_kwargs_2["end_date"] = find_closest_date_before(end_date_list_test[step], date_list)
@@ -233,6 +241,7 @@ def main():
                 model.set_parameters(last_best_model_path)
             model.set_random_seed(seed)
 
+            # モデルの学習
             model.learn(total_timesteps=training_steps,
                         callback=[eval_callback_0, eval_callback_1, eval_callback_2,])
 
