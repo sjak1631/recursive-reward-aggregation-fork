@@ -8,7 +8,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 RUNNER="${SCRIPT_DIR}/runner_full_exp_fin_env.py"
 
 for SEED in "${SEEDS[@]}"; do
-    SESSION_NAME="PPO_Portfolio_ours_multi_env_seed${SEED}"
+    SESSION_NAME="PPO_Portfolio_sharpe_ours_multi_env_seed${SEED}"
     LOG_DIR="${SCRIPT_DIR}/workspace/${SEED}"
     mkdir -p "$LOG_DIR"
 
