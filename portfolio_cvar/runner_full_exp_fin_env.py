@@ -16,7 +16,7 @@ sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, REPO_ROOT)
 
 from recursive_stable_baselines3 import Recursive_PPO_multi_output
-from recursive_stable_baselines3.recursive_common.statistics_portfolio import init_sharpe, post_sharpe, update_sharpe
+from recursive_stable_baselines3.recursive_common.statistics_portfolio import CVAR_NUM_BINS, init_cvar, post_cvar, update_cvar
 
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -24,14 +24,28 @@ from stable_baselines3.common.env_util import make_vec_env
 
 from own_eval_callback import OwnEvalCallback, own_eval_policy
 
-from fin_env import FinEnv, FinEnv_resursive
+from fin_env import FinEnv_resursive
 from fin_utils import find_closest_date_before, find_closest_date_after, str_to_bool
 
 
-init = init_sharpe()
-update = update_sharpe
-post = post_sharpe
-output_feature_num = 3
+init = init_cvar()  # Returns PyTorch tensor by default
+update = update_cvar
+post = post_cvar
+output_feature_num = 2 * CVAR_NUM_BINS
+
+
+def compute_cvar_from_returns(returns):
+    """Compute CVaR from a sequence of returns using NumPy-based tau."""
+    tau = init_cvar(as_torch=False)  # Use NumPy version for evaluation
+    for reward in np.asarray(returns, dtype=np.float32).reshape(-1):
+        tau = update_cvar(reward, tau)  # update_cvar handles both NumPy and Torch
+    # post_cvar will return a NumPy array or scalar when input is NumPy
+    cvar_value = post_cvar(tau)
+    if isinstance(cvar_value, np.ndarray):
+        cvar_value = float(cvar_value[0]) if cvar_value.size == 1 else float(cvar_value)
+    else:
+        cvar_value = float(cvar_value)
+    return np.nan_to_num(cvar_value, nan=0.0, posinf=0.0, neginf=0.0)
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
@@ -115,9 +129,9 @@ def main():
     best_model_seed = []
 
     # shapes (n_steps, n_seeds)
-    sharpe_list_train = []
-    sharpe_list_eval = []
-    sharpe_list_test = []
+    cvar_list_train = []
+    cvar_list_eval = []
+    cvar_list_test = []
 
     # shapes (n_steps, n_seeds, n_steps)
     all_R_train = []
@@ -137,9 +151,9 @@ def main():
         tensorboard_dir_log = os.path.join(tensorboard_dir, f"tensorboard_{step}")
         check_and_make_directories([best_model_save_path, tensorboard_dir_log])
 
-        sharpe_list_train_step = []
-        sharpe_list_eval_step = []
-        sharpe_list_test_step = []
+        cvar_list_train_step = []
+        cvar_list_eval_step = []
+        cvar_list_test_step = []
 
         all_R_train_step = []
         all_R_eval_step = []
@@ -258,8 +272,7 @@ def main():
                 eval_env_0,
                 deterministic=deterministic_eval,
             )
-            sharpe_same = ep.sharpe_ratio(R_same)
-            sharpe_same = np.nan_to_num(sharpe_same, nan=0.0)
+            cvar_same = compute_cvar_from_returns(R_same)
 
             model.set_parameters(os.path.join(best_model_save_path, "best_model" + "_eval" + to_add))
             eval_env_1 = FinEnv_resursive(**eval_env_kwargs_1)
@@ -268,8 +281,7 @@ def main():
                 eval_env_1,
                 deterministic=deterministic_eval,
             )
-            sharpe_eval = ep.sharpe_ratio(R_eval)
-            sharpe_eval = np.nan_to_num(sharpe_eval, nan=0.0)
+            cvar_eval = compute_cvar_from_returns(R_eval)
 
             model.set_parameters(os.path.join(best_model_save_path, "best_model" + "_eval" + to_add))
             eval_env_2 = FinEnv_resursive(**eval_env_kwargs_2)
@@ -278,46 +290,45 @@ def main():
                 eval_env_2,
                 deterministic=deterministic_eval,
             )
-            sharpe_test = ep.sharpe_ratio(R_test)
-            sharpe_test = np.nan_to_num(sharpe_test, nan=0.0)
+            cvar_test = compute_cvar_from_returns(R_test)
 
 
-            sharpe_list_train_step.append(sharpe_same)
-            sharpe_list_eval_step.append(sharpe_eval)
-            sharpe_list_test_step.append(sharpe_test)
+            cvar_list_train_step.append(cvar_same)
+            cvar_list_eval_step.append(cvar_eval)
+            cvar_list_test_step.append(cvar_test)
 
             all_R_train_step.append(R_same)
             all_R_eval_step.append(R_eval)
             all_R_test_step.append(R_test)
 
             
-        sharpe_list_train.append(sharpe_list_train_step)
-        sharpe_list_test.append(sharpe_list_test_step)
-        sharpe_list_eval.append(sharpe_list_eval_step)
+        cvar_list_train.append(cvar_list_train_step)
+        cvar_list_test.append(cvar_list_test_step)
+        cvar_list_eval.append(cvar_list_eval_step)
 
         all_R_train.append(all_R_train_step)
         all_R_eval.append(all_R_eval_step)
         all_R_test.append(all_R_test_step)
 
         # find best eval model
-        best_seed = seeds[np.argmax(sharpe_list_eval_step)]
+        best_seed = seeds[np.argmax(cvar_list_eval_step)]
         best_model_seed.append(best_seed)
         to_add_best=f"_seed={best_seed}, {start_date=}, {end_date=}, {step=}"
         last_best_model_path = os.path.join(best_model_save_path, "best_model" + "_eval" + to_add_best)  
 
-        # Save sharpe ratios
-        sharpe_train_np = np.array(sharpe_list_train)
-        sharpe_test_np = np.array(sharpe_list_test)
-        sharpe_eval_np = np.array(sharpe_list_eval)
+        # Save CVaR scores
+        cvar_train_np = np.array(cvar_list_train)
+        cvar_test_np = np.array(cvar_list_test)
+        cvar_eval_np = np.array(cvar_list_eval)
 
         best_model_seed_np = np.array(best_model_seed)
 
-        with open(os.path.join(log_dir, "sharpe_train.npy"), "wb") as f:
-            np.save(f, sharpe_train_np)
-        with open(os.path.join(log_dir, "sharpe_test.npy"), "wb") as f:
-            np.save(f, sharpe_test_np)
-        with open(os.path.join(log_dir, "sharpe_eval.npy"), "wb") as f:
-            np.save(f, sharpe_eval_np)
+        with open(os.path.join(log_dir, "cvar_train.npy"), "wb") as f:
+            np.save(f, cvar_train_np)
+        with open(os.path.join(log_dir, "cvar_test.npy"), "wb") as f:
+            np.save(f, cvar_test_np)
+        with open(os.path.join(log_dir, "cvar_eval.npy"), "wb") as f:
+            np.save(f, cvar_eval_np)
 
         with open(os.path.join(log_dir, "all_R_train.pkl"), "wb") as f:
             pickle.dump(all_R_train, f)
