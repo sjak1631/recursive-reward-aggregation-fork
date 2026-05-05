@@ -25,7 +25,7 @@ except ImportError:
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, sync_envs_normalization
 
-from fin_env import FinEnv
+from fin_env import FinEnv_resursive as FinEnv
 
 
 if TYPE_CHECKING:

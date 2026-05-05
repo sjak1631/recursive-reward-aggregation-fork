@@ -193,6 +193,7 @@ def main():
             to_add=f"_{seed=}, {start_date=}, {end_date=}, {step=}"
 
             # same (training)
+            # Training-time checkpoint selection follows mean reward, like portfolio_sharpe.
             eval_env_kwargs_0 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_0["start_date"] = find_closest_date_after(start_date_list_train[step], date_list) 
             eval_env_kwargs_0["end_date"] = find_closest_date_before(end_date_list_train[step], date_list)
@@ -217,7 +218,7 @@ def main():
                                         deterministic=deterministic_eval, render=False, to_add="_eval" + to_add, verbose=verbose,
                                         tens_name=f"eval_{step}",)
 
-            # test(本来はここでtestはいらないはずだけど、モデル選択に使われなかったモデルについても性能をログで残せる)
+            # test (the test split is logged for analysis, not for checkpoint selection)
             eval_env_kwargs_2 = copy.deepcopy(env_kwargs)
             eval_env_kwargs_2["start_date"] = find_closest_date_after(start_date_list_test[step], date_list) 
             eval_env_kwargs_2["end_date"] = find_closest_date_before(end_date_list_test[step], date_list)
@@ -264,7 +265,7 @@ def main():
             eval_env_2.close()
             vec_env.close()
 
-            # Eval results
+            # Post-training CVaR analysis for the best checkpoints saved during training.
             model.set_parameters(os.path.join(best_model_save_path, "best_model" + "_same" + to_add))
             eval_env_0 = FinEnv_resursive(**eval_env_kwargs_0)
             _, _, R_same = own_eval_policy(
@@ -310,7 +311,7 @@ def main():
         all_R_eval.append(all_R_eval_step)
         all_R_test.append(all_R_test_step)
 
-        # find best eval model
+        # Choose the next seed to carry forward using the eval CVaR.
         best_seed = seeds[np.argmax(cvar_list_eval_step)]
         best_model_seed.append(best_seed)
         to_add_best=f"_seed={best_seed}, {start_date=}, {end_date=}, {step=}"
