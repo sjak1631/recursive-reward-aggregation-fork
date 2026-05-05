@@ -17,7 +17,6 @@ def _as_numpy(value):
         return value.detach().cpu().numpy()
     return np.asarray(value)
 
-# 
 def _prepare_cvar_tau(tau):
     tau_array = _as_numpy(tau).astype(np.float32, copy=True)
     squeezed = tau_array.ndim == 1
