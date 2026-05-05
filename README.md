@@ -64,7 +64,7 @@ This can resolve version conflicts or compatibility issues with certain dependen
 This repository is focused on the portfolio experiment. The training script uses a recursive PPO variant with portfolio-specific statistics.
 
 ```sh
-/workspace/RRA/portfolio_sharpe/run_portfolio.sh
+/workspace/RRA/portfolio_cvar/run_portfolio.sh
 ```
 
 If you are already inside the container (prompt like `root@...:/workspace/RRA#`), the training launched by `run_portfolio.sh` runs under `tmux`. Use these commands inside the container:
@@ -76,8 +76,8 @@ tmux ls
 # Attach to a session (replace <SESSION_NAME> with the name shown by tmux ls)
 tmux attach -t <SESSION_NAME>
 
-# Example: attach to the PPO session
-tmux attach -t PPO_Portfolio_ours_multi_env_seed4
+# Example: attach to the CVaR PPO session
+tmux attach -t PPO_Portfolio_cvar_ours_multi_env_seed4
 ```
 
 Detach without stopping the session using `Ctrl+b` then `d`.
@@ -85,5 +85,5 @@ Detach without stopping the session using `Ctrl+b` then `d`.
 
 Notes:
 - `run_portfolio.sh` uses `tmux` and activates `~/your_env/bin/activate`. Update that path for your environment.
-- Outputs are written under `/workspace/RRA/portfolio_sharpe/workspace/`.
-- The experiment expects data in `portfolio_sharpe/preproc_data/`.
+- Outputs are written under `/workspace/RRA/portfolio_cvar/workspace/`.
+- The experiment expects data in `portfolio_cvar/preproc_data/`.
