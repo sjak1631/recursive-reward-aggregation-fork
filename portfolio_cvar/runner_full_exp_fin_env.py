@@ -16,7 +16,11 @@ sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, REPO_ROOT)
 
 from recursive_stable_baselines3 import Recursive_PPO_multi_output
-from recursive_stable_baselines3.recursive_common.statistics_portfolio import init_cvar, post_cvar, update_cvar
+from recursive_stable_baselines3.recursive_common.statistics_portfolio import (
+    init_cvar, post_cvar, update_cvar,
+    init_sharpe, post_sharpe, update_sharpe,
+    init_mean_return, post_mean_return, update_mean_return,
+)
 
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -35,6 +39,51 @@ output_feature_num = None  # 後で初期化
 cvar_num_bins = 201  # グローバル変数
 
 
+def _build_train_objective_registry(cvar_num_bins: int) -> dict:
+    """学習目的のレジストリを構築する。新しい目的を追加する場合はここに追記する。
+
+    各エントリは (init, update, post, output_feature_num) のタプル。
+    """
+
+    def _make_cvar_update(num_bins):
+        def _update(rewards, tau):
+            return update_cvar(rewards, tau, num_bins=num_bins)
+        return _update
+
+    def _make_cvar_post(num_bins):
+        def _post(tau):
+            return post_cvar(tau, num_bins=num_bins)
+        return _post
+
+    return {
+        "cvar": (
+            init_cvar(num_bins=cvar_num_bins, as_torch=True),
+            _make_cvar_update(cvar_num_bins),
+            _make_cvar_post(cvar_num_bins),
+            2 * cvar_num_bins,
+        ),
+        "sharpe": (
+            init_sharpe(),
+            update_sharpe,
+            post_sharpe,
+            3,
+        ),
+        "mean_return": (
+            init_mean_return(),
+            update_mean_return,
+            post_mean_return,
+            2,
+        ),
+        # 新しい目的をここに追加:
+        # "example": (
+        #     init_example(),
+        #     update_example,
+        #     post_example,
+        #     <output_feature_num>,
+        # ),
+    }
+
+
 def compute_cvar_from_returns(returns):
     """Compute CVaR from a sequence of returns using NumPy-based tau."""
     global cvar_num_bins
@@ -50,18 +99,6 @@ def compute_cvar_from_returns(returns):
     return np.nan_to_num(cvar_value, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-def _make_update_wrapper(num_bins):
-    """Create an update wrapper with fixed num_bins."""
-    def update_wrapper(rewards, tau):
-        return update_cvar(rewards, tau, num_bins=num_bins)
-    return update_wrapper
-
-
-def _make_post_wrapper(num_bins):
-    """Create a post wrapper with fixed num_bins."""
-    def post_wrapper(tau):
-        return post_cvar(tau, num_bins=num_bins)
-    return post_wrapper
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
@@ -77,6 +114,8 @@ def main():
     parser.add_argument('--adapt_reward', type=str, default="False", help='adapt reward')
     parser.add_argument('--result_dir', type=str, default="./full_exp", help='output directory')
     parser.add_argument('--cvar_num_bins', type=int, default=201, help='Number of bins for CVaR calculation')
+    parser.add_argument('--train_objective', type=str, default='cvar',
+                        help='学習目的。利用可能な値: cvar, sharpe (将来追加予定: mean_return など)')
 
 
     args = vars(parser.parse_args())
@@ -89,13 +128,22 @@ def main():
     
     global init, update, post, output_feature_num, cvar_num_bins
     cvar_num_bins = args["cvar_num_bins"]
-    
-    init = init_cvar(num_bins=cvar_num_bins, as_torch=True)
-    update = _make_update_wrapper(cvar_num_bins)
-    post = _make_post_wrapper(cvar_num_bins)
-    output_feature_num = 2 * cvar_num_bins
+    train_objective = args["train_objective"]
 
-    print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {cvar_num_bins=}", flush=True)
+    registry = _build_train_objective_registry(cvar_num_bins)
+    if train_objective not in registry:
+        raise ValueError(
+            f"未知の train_objective: '{train_objective}'。"
+            f"利用可能な値: {list(registry.keys())}"
+        )
+    init, update, post, output_feature_num = registry[train_objective]
+
+    bins_suffix = f"_bins{cvar_num_bins}" if train_objective == "cvar" else ""
+
+    if train_objective == "cvar":
+        print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {cvar_num_bins=}, {train_objective=}", flush=True)
+    else:
+        print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {train_objective=}", flush=True)
 
 
     # 5years
@@ -120,8 +168,8 @@ def main():
     exp_dir = os.path.abspath(args["result_dir"])
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
-    log_dir=os.path.join(exp_dir, f'log_{adapt_reward=}_{adapt_state=}')
-    tensorboard_dir =os.path.join(exp_dir, f"tensorboard_{adapt_reward=}_{adapt_state=}")
+    log_dir=os.path.join(exp_dir, f'log_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}')
+    tensorboard_dir =os.path.join(exp_dir, f"tensorboard_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}")
 
     check_and_make_directories([log_dir, tensorboard_dir])
 
