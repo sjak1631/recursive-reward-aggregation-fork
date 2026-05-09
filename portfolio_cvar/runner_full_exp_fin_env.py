@@ -16,7 +16,7 @@ sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, REPO_ROOT)
 
 from recursive_stable_baselines3 import Recursive_PPO_multi_output
-from recursive_stable_baselines3.recursive_common.statistics_portfolio import CVAR_NUM_BINS, init_cvar, post_cvar, update_cvar
+from recursive_stable_baselines3.recursive_common.statistics_portfolio import init_cvar, post_cvar, update_cvar
 
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -28,24 +28,40 @@ from fin_env import FinEnv_resursive
 from fin_utils import find_closest_date_before, find_closest_date_after, str_to_bool
 
 
-init = init_cvar()  # Returns PyTorch tensor by default
-update = update_cvar
-post = post_cvar
-output_feature_num = 2 * CVAR_NUM_BINS
+init = None  # 後で初期化
+update = None  # 後で初期化
+post = None  # 後で初期化
+output_feature_num = None  # 後で初期化
+cvar_num_bins = 201  # グローバル変数
 
 
 def compute_cvar_from_returns(returns):
     """Compute CVaR from a sequence of returns using NumPy-based tau."""
-    tau = init_cvar(as_torch=False)  # Use NumPy version for evaluation
+    global cvar_num_bins
+    tau = init_cvar(num_bins=cvar_num_bins, as_torch=False)  # Use NumPy version for evaluation
     for reward in np.asarray(returns, dtype=np.float32).reshape(-1):
-        tau = update_cvar(reward, tau)  # update_cvar handles both NumPy and Torch
+        tau = update_cvar(reward, tau, num_bins=cvar_num_bins)  # update_cvar handles both NumPy and Torch
     # post_cvar will return a NumPy array or scalar when input is NumPy
-    cvar_value = post_cvar(tau)
+    cvar_value = post_cvar(tau, num_bins=cvar_num_bins)
     if isinstance(cvar_value, np.ndarray):
         cvar_value = float(cvar_value[0]) if cvar_value.size == 1 else float(cvar_value)
     else:
         cvar_value = float(cvar_value)
     return np.nan_to_num(cvar_value, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _make_update_wrapper(num_bins):
+    """Create an update wrapper with fixed num_bins."""
+    def update_wrapper(rewards, tau):
+        return update_cvar(rewards, tau, num_bins=num_bins)
+    return update_wrapper
+
+
+def _make_post_wrapper(num_bins):
+    """Create a post wrapper with fixed num_bins."""
+    def post_wrapper(tau):
+        return post_cvar(tau, num_bins=num_bins)
+    return post_wrapper
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
@@ -53,12 +69,15 @@ def check_and_make_directories(directories: list[str]):
             os.makedirs(directory, exist_ok=True)
 
 def main():
+
     parser = argparse.ArgumentParser(description="Runner Parser",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--seed_start', type=int, default=5, help='Random seed')
     parser.add_argument('--adapt_state', type=str, default="False", help='adapt state')
     parser.add_argument('--adapt_reward', type=str, default="False", help='adapt reward')
     parser.add_argument('--result_dir', type=str, default="./full_exp", help='output directory')
+    parser.add_argument('--cvar_num_bins', type=int, default=201, help='Number of bins for CVaR calculation')
+
 
     args = vars(parser.parse_args())
     # We used seed_start [0, 5, 10, 15, 20] for the experiments
@@ -67,8 +86,16 @@ def main():
     seeds = np.arange(seed_start, seed_start+n_seeds, 1, dtype=int)
     adapt_state=str_to_bool(args["adapt_state"])
     adapt_reward=str_to_bool(args["adapt_reward"])
+    
+    global init, update, post, output_feature_num, cvar_num_bins
+    cvar_num_bins = args["cvar_num_bins"]
+    
+    init = init_cvar(num_bins=cvar_num_bins, as_torch=True)
+    update = _make_update_wrapper(cvar_num_bins)
+    post = _make_post_wrapper(cvar_num_bins)
+    output_feature_num = 2 * cvar_num_bins
 
-    print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}", flush=True)
+    print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {cvar_num_bins=}", flush=True)
 
 
     # 5years

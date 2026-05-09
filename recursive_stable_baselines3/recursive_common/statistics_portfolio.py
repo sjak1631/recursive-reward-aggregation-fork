@@ -9,7 +9,7 @@ def softplus(x):
 CVAR_ALPHA = 0.05
 CVAR_REWARD_MIN = -1.0
 CVAR_REWARD_MAX = 1.0
-CVAR_NUM_BINS = 201
+
 
 # 入力をnumpyにそろえる
 def _as_numpy(value):
@@ -39,7 +39,7 @@ def _cvar_bin_centers(num_bins: int, reward_min: float, reward_max: float):
     return reward_min + (np.arange(num_bins, dtype=np.float32) + 0.5) * bin_width
 
 
-def init_cvar(num_bins: int = CVAR_NUM_BINS, as_torch: bool = True):
+def init_cvar(num_bins: int = 201, as_torch: bool = True):
     if as_torch: #torchの場合
         #出現回数
         init_tau_count = th.zeros(num_bins, dtype=th.float32)
@@ -55,7 +55,7 @@ def init_cvar(num_bins: int = CVAR_NUM_BINS, as_torch: bool = True):
 def update_cvar(
     rewards,
     tau,
-    num_bins: int = CVAR_NUM_BINS,
+    num_bins: int = 201,
     reward_min: float = CVAR_REWARD_MIN,
     reward_max: float = CVAR_REWARD_MAX,
 ):
@@ -96,7 +96,7 @@ def update_cvar(
 def post_cvar(
     tau,
     alpha: float = CVAR_ALPHA,
-    num_bins: int = CVAR_NUM_BINS,
+    num_bins: int = 201,
     reward_min: float = CVAR_REWARD_MIN,
     reward_max: float = CVAR_REWARD_MAX,
 ):

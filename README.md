@@ -64,7 +64,7 @@ This can resolve version conflicts or compatibility issues with certain dependen
 This repository is focused on the portfolio experiment. The training script uses a recursive PPO variant with portfolio-specific statistics.
 
 ```sh
-/workspace/RRA/portfolio_cvar/run_portfolio.sh
+/workspace/RRA/portfolio_cvar/run_portfolio.sh 4 False False 201
 ```
 
 If you are already inside the container (prompt like `root@...:/workspace/RRA#`), the training launched by `run_portfolio.sh` runs under `tmux`. Use these commands inside the container:
@@ -77,7 +77,7 @@ tmux ls
 tmux attach -t <SESSION_NAME>
 
 # Example: attach to the CVaR PPO session
-tmux attach -t PPO_Portfolio_cvar_ours_multi_env_seed4
+tmux attach -t PPO_Portfolio_cvar_ours_multi_env_seed4_bins201
 ```
 
 Detach without stopping the session using `Ctrl+b` then `d`.
