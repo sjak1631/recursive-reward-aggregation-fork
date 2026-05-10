@@ -54,6 +54,9 @@ class OwnEvalCallback(EventCallback):
         warn: bool = True,
         to_add: str = "best_model",
         tens_name="eval",
+        metric: str = "mean_reward",
+        single_eval_env_fn: Optional[Callable[[], Any]] = None,
+        metric_fn: Optional[Callable[[np.ndarray], float]] = None,
     ):
         super().__init__(callback_after_eval, verbose=verbose)
 
@@ -72,6 +75,10 @@ class OwnEvalCallback(EventCallback):
         self.render = render
         self.warn = warn
         self.tens_name = tens_name
+        self.metric = metric
+        self.single_eval_env_fn = single_eval_env_fn
+        self.metric_fn = metric_fn
+        self.best_mean_metric = -np.inf
 
         # Convert to VecEnv for consistency
         if not isinstance(eval_env, VecEnv):
@@ -189,12 +196,30 @@ class OwnEvalCallback(EventCallback):
             self.logger.record("time/total_timesteps", self.num_timesteps, exclude="tensorboard")
             self.logger.dump(self.num_timesteps)
 
-            if mean_reward > self.best_mean_reward:
-                if self.verbose >= 1:
-                    print("New best mean reward!")
+            # Compute primary selection metric
+            if self.metric != "mean_reward" and self.single_eval_env_fn is not None and self.metric_fn is not None:
+                episode_metrics = []
+                for _ in range(self.n_eval_episodes):
+                    single_env = self.single_eval_env_fn()
+                    _, _, ep_returns = own_eval_policy(self.model, single_env, deterministic=self.deterministic)
+                    episode_metrics.append(self.metric_fn(np.asarray(ep_returns)))
+                mean_metric = float(np.mean(episode_metrics))
+                self.logger.record(self.tens_name + f"/mean_{self.metric}", mean_metric)
+                is_best = mean_metric > self.best_mean_metric
+                if is_best:
+                    self.best_mean_metric = mean_metric
+                    if self.verbose >= 1:
+                        print(f"New best mean {self.metric}: {mean_metric:.6f}")
+            else:
+                is_best = mean_reward > self.best_mean_reward
+                if is_best:
+                    self.best_mean_reward = float(mean_reward)
+                    if self.verbose >= 1:
+                        print("New best mean reward!")
+
+            if is_best:
                 if self.best_model_save_path is not None:
                     self.model.save(os.path.join(self.best_model_save_path, "best_model" + self.to_add))
-                self.best_mean_reward = float(mean_reward)
                 # Trigger callback on new best model, if needed
                 if self.callback_on_new_best is not None:
                     continue_training = self.callback_on_new_best.on_step()

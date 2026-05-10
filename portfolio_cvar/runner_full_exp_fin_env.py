@@ -99,6 +99,21 @@ def compute_cvar_from_returns(returns):
     return np.nan_to_num(cvar_value, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def compute_sharpe_from_returns(returns):
+    """Compute annualized Sharpe ratio from a sequence of daily step returns."""
+    returns = np.asarray(returns, dtype=np.float64).reshape(-1)
+    std = np.std(returns)
+    if std < 1e-10:
+        return 0.0
+    return float(np.nan_to_num(np.mean(returns) / std * np.sqrt(252), nan=0.0, posinf=0.0, neginf=0.0))
+
+
+def compute_mean_return_from_returns(returns):
+    """Compute mean step return from a sequence of step returns."""
+    returns = np.asarray(returns, dtype=np.float64).reshape(-1)
+    return float(np.nan_to_num(np.mean(returns), nan=0.0, posinf=0.0, neginf=0.0))
+
+
 
 def check_and_make_directories(directories: list[str]):
     for directory in directories:
@@ -137,6 +152,14 @@ def main():
             f"利用可能な値: {list(registry.keys())}"
         )
     init, update, post, output_feature_num = registry[train_objective]
+
+    # Select per-episode metric function for eval callback best-model selection
+    _metric_fn_map = {
+        "cvar": compute_cvar_from_returns,
+        "sharpe": compute_sharpe_from_returns,
+        "mean_return": compute_mean_return_from_returns,
+    }
+    metric_fn_for_callback = _metric_fn_map.get(train_objective, None)
 
     bins_suffix = f"_bins{cvar_num_bins}" if train_objective == "cvar" else ""
 
@@ -275,10 +298,14 @@ def main():
             eval_env_kwargs_0["eval"] = True
             eval_env_0 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_0)
+            eval_env_callback_0 = eval_env_kwargs_0
             eval_callback_0 = OwnEvalCallback(eval_env_0, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
                                         deterministic=deterministic_eval, render=False, to_add= "_same" + to_add, verbose=verbose,
-                                        tens_name=f"same_{step}",)
+                                        tens_name=f"same_{step}",
+                                        metric=train_objective,
+                                        single_eval_env_fn=lambda kwargs=eval_env_callback_0: FinEnv_resursive(**kwargs),
+                                        metric_fn=metric_fn_for_callback,)
 
             # eval (model selection)
             eval_env_kwargs_1 = copy.deepcopy(env_kwargs)
@@ -288,10 +315,14 @@ def main():
             eval_env_1 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_1)
 
+            eval_env_callback_1 = eval_env_kwargs_1
             eval_callback_1 = OwnEvalCallback(eval_env_1, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
                                         deterministic=deterministic_eval, render=False, to_add="_eval" + to_add, verbose=verbose,
-                                        tens_name=f"eval_{step}",)
+                                        tens_name=f"eval_{step}",
+                                        metric=train_objective,
+                                        single_eval_env_fn=lambda kwargs=eval_env_callback_1: FinEnv_resursive(**kwargs),
+                                        metric_fn=metric_fn_for_callback,)
 
             # test (the test split is logged for analysis, not for checkpoint selection)
             eval_env_kwargs_2 = copy.deepcopy(env_kwargs)
@@ -300,10 +331,14 @@ def main():
             eval_env_kwargs_2["eval"] = True
             eval_env_2 = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv,
                                     env_kwargs=eval_env_kwargs_2)
+            eval_env_callback_2 = eval_env_kwargs_2
             eval_callback_2 = OwnEvalCallback(eval_env_2, best_model_save_path=best_model_save_path,
                                         log_path=best_model_save_path, eval_freq=eval_freq, n_eval_episodes=n_traj_eval,
                                         deterministic=deterministic_eval, render=False, to_add= "_test" + to_add, verbose=verbose,
-                                        tens_name=f"test_{step}",)
+                                        tens_name=f"test_{step}",
+                                        metric=train_objective,
+                                        single_eval_env_fn=lambda kwargs=eval_env_callback_2: FinEnv_resursive(**kwargs),
+                                        metric_fn=metric_fn_for_callback,)
 
             vec_env = make_vec_env(FinEnv_resursive, n_envs=n_envs, monitor_dir=log_dir, vec_env_cls=SubprocVecEnv, env_kwargs=env_kwargs)
 
