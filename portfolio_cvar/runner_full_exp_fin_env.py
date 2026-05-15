@@ -39,28 +39,32 @@ output_feature_num = None  # 後で初期化
 cvar_num_bins = 201  # グローバル変数
 
 
-def _build_train_objective_registry(cvar_num_bins: int) -> dict:
+def _build_train_objective_registry(cvar_num_bins: int, cvar_use_sums: bool = False) -> dict:
     """学習目的のレジストリを構築する。新しい目的を追加する場合はここに追記する。
 
     各エントリは (init, update, post, output_feature_num) のタプル。
+    cvar_use_sums=True: sumsあり (精度高, 次元=2*bins)
+    cvar_use_sums=False: sumsなし (ビン中心使用, 次元=bins)
     """
 
-    def _make_cvar_update(num_bins):
+    def _make_cvar_update(num_bins, use_sums):
         def _update(rewards, tau):
-            return update_cvar(rewards, tau, num_bins=num_bins)
+            return update_cvar(rewards, tau, num_bins=num_bins, use_sums=use_sums)
         return _update
 
-    def _make_cvar_post(num_bins):
+    def _make_cvar_post(num_bins, use_sums):
         def _post(tau):
-            return post_cvar(tau, num_bins=num_bins)
+            return post_cvar(tau, num_bins=num_bins, use_sums=use_sums)
         return _post
+
+    cvar_output_dim = 2 * cvar_num_bins if cvar_use_sums else cvar_num_bins
 
     return {
         "cvar": (
-            init_cvar(num_bins=cvar_num_bins, as_torch=True),
-            _make_cvar_update(cvar_num_bins),
-            _make_cvar_post(cvar_num_bins),
-            2 * cvar_num_bins,
+            init_cvar(num_bins=cvar_num_bins, as_torch=True, use_sums=cvar_use_sums),
+            _make_cvar_update(cvar_num_bins, cvar_use_sums),
+            _make_cvar_post(cvar_num_bins, cvar_use_sums),
+            cvar_output_dim,
         ),
         "sharpe": (
             init_sharpe(),
@@ -85,18 +89,24 @@ def _build_train_objective_registry(cvar_num_bins: int) -> dict:
 
 
 def compute_cvar_from_returns(returns):
-    """Compute CVaR from a sequence of returns using NumPy-based tau."""
-    global cvar_num_bins
-    tau = init_cvar(num_bins=cvar_num_bins, as_torch=False)  # Use NumPy version for evaluation
-    for reward in np.asarray(returns, dtype=np.float32).reshape(-1):
-        tau = update_cvar(reward, tau, num_bins=cvar_num_bins)  # update_cvar handles both NumPy and Torch
-    # post_cvar will return a NumPy array or scalar when input is NumPy
-    cvar_value = post_cvar(tau, num_bins=cvar_num_bins)
-    if isinstance(cvar_value, np.ndarray):
-        cvar_value = float(cvar_value[0]) if cvar_value.size == 1 else float(cvar_value)
-    else:
-        cvar_value = float(cvar_value)
-    return np.nan_to_num(cvar_value, nan=0.0, posinf=0.0, neginf=0.0)
+    """Compute TRUE CVaR from a sequence of returns (without histogram approximation).
+
+    評価用の真のCVaR計算。学習時のヒストグラムベース近似ではなく、
+    実際の報酬分布の下位 alpha% の平均を直接計算する。
+    これにより、ビン幅による量子化誤差を排除する。
+    """
+    from recursive_stable_baselines3.recursive_common.statistics_portfolio import CVAR_ALPHA
+
+    returns = np.asarray(returns, dtype=np.float64).reshape(-1)
+    if returns.size == 0:
+        return 0.0
+
+    alpha = CVAR_ALPHA
+    sorted_returns = np.sort(returns)
+    # 下位 alpha% のサンプル数（最低1サンプル確保）
+    n_tail = max(1, int(np.floor(returns.size * alpha)))
+    tail_mean = float(np.mean(sorted_returns[:n_tail]))
+    return float(np.nan_to_num(tail_mean, nan=0.0, posinf=0.0, neginf=0.0))
 
 
 def compute_sharpe_from_returns(returns):
@@ -129,6 +139,8 @@ def main():
     parser.add_argument('--adapt_reward', type=str, default="False", help='adapt reward')
     parser.add_argument('--result_dir', type=str, default="./full_exp", help='output directory')
     parser.add_argument('--cvar_num_bins', type=int, default=201, help='Number of bins for CVaR calculation')
+    parser.add_argument('--cvar_use_sums', type=str, default="False",
+                        help='CVaRヒストグラムでsumsを追跡するか (True: 精度高/2*bins次元, False: ビン中心使用/bins次元)')
     parser.add_argument('--train_objective', type=str, default='cvar',
                         help='学習目的。利用可能な値: cvar, sharpe (将来追加予定: mean_return など)')
 
@@ -143,9 +155,10 @@ def main():
     
     global init, update, post, output_feature_num, cvar_num_bins
     cvar_num_bins = args["cvar_num_bins"]
+    cvar_use_sums = str_to_bool(args["cvar_use_sums"])
     train_objective = args["train_objective"]
 
-    registry = _build_train_objective_registry(cvar_num_bins)
+    registry = _build_train_objective_registry(cvar_num_bins, cvar_use_sums)
     if train_objective not in registry:
         raise ValueError(
             f"未知の train_objective: '{train_objective}'。"
@@ -162,9 +175,13 @@ def main():
     metric_fn_for_callback = _metric_fn_map.get(train_objective, None)
 
     bins_suffix = f"_bins{cvar_num_bins}" if train_objective == "cvar" else ""
+    if train_objective == "cvar":
+        sums_suffix = "_sums" if cvar_use_sums else "_without_sums"
+    else:
+        sums_suffix = ""
 
     if train_objective == "cvar":
-        print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {cvar_num_bins=}, {train_objective=}", flush=True)
+        print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {cvar_num_bins=}, {cvar_use_sums=}, {train_objective=}", flush=True)
     else:
         print(f"{seed_start=}, {adapt_state=}, {adapt_reward=}, {train_objective=}", flush=True)
 
@@ -191,8 +208,8 @@ def main():
     exp_dir = os.path.abspath(args["result_dir"])
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
-    log_dir=os.path.join(exp_dir, f'log_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}')
-    tensorboard_dir =os.path.join(exp_dir, f"tensorboard_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}")
+    log_dir=os.path.join(exp_dir, f'log_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}{sums_suffix}')
+    tensorboard_dir =os.path.join(exp_dir, f"tensorboard_{adapt_reward=}_{adapt_state=}_{train_objective}{bins_suffix}{sums_suffix}")
 
     check_and_make_directories([log_dir, tensorboard_dir])
 
@@ -257,7 +274,6 @@ def main():
         all_R_eval_step = []
         all_R_test_step = []
 
-        # seed値ごとに環境+モデルのセットを生成
         for seed in seeds:
             seed = int(seed)
             th.manual_seed(seed)
