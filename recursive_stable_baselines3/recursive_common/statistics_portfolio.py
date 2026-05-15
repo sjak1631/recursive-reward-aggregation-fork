@@ -41,23 +41,28 @@ def _cvar_bin_centers(num_bins: int, reward_min: float, reward_max: float):
     return reward_min + (np.arange(num_bins, dtype=np.float32) + 0.5) * bin_width
 
 
-def init_cvar(num_bins: int = 201, as_torch: bool = True):
-    if as_torch: #torchの場合
-        #出現回数
+def init_cvar(num_bins: int = 201, as_torch: bool = True, use_sums: bool = False):
+    if as_torch:
         init_tau_count = th.zeros(num_bins, dtype=th.float32)
-        #報酬の合計
-        init_tau_sum = th.zeros(num_bins, dtype=th.float32)
-        return th.cat([init_tau_count, init_tau_sum]).float()
-    else:#numpyの場合
+        if use_sums:
+            init_tau_sum = th.zeros(num_bins, dtype=th.float32)
+            return th.cat([init_tau_count, init_tau_sum]).float()
+        else:
+            return init_tau_count.float()
+    else:
         init_tau_count = np.zeros(num_bins, dtype=np.float32)
-        init_tau_sum = np.zeros(num_bins, dtype=np.float32)
-        return np.concatenate([init_tau_count, init_tau_sum]).astype(np.float32)
+        if use_sums:
+            init_tau_sum = np.zeros(num_bins, dtype=np.float32)
+            return np.concatenate([init_tau_count, init_tau_sum]).astype(np.float32)
+        else:
+            return init_tau_count.astype(np.float32)
 
 #ヒストグラムの情報を更新
 def update_cvar(
     rewards,
     tau,
     num_bins: int = 201,
+    use_sums: bool = False,
     reward_min: float = CVAR_REWARD_MIN,
     reward_max: float = CVAR_REWARD_MAX,
 ):
@@ -69,9 +74,9 @@ def update_cvar(
     update_tau, squeezed = _prepare_cvar_tau(tau)
     reward_array = _prepare_cvar_rewards(rewards, update_tau.shape[0])
 
-    #counts/sumに分割
     counts = update_tau[:, :num_bins]
-    sums = update_tau[:, num_bins: 2 * num_bins]
+    if use_sums:
+        sums = update_tau[:, num_bins: 2 * num_bins]
 
     #rewardsのクリップ
     clipped_rewards = np.clip(reward_array, reward_min, reward_max)
@@ -81,7 +86,8 @@ def update_cvar(
 
     row_indices = np.arange(update_tau.shape[0])
     counts[row_indices, bin_indices] += 1.0
-    sums[row_indices, bin_indices] += clipped_rewards
+    if use_sums:
+        sums[row_indices, bin_indices] += clipped_rewards
 
     if squeezed:
         result = update_tau[0].astype(np.float32)
@@ -94,11 +100,12 @@ def update_cvar(
     
     return result
 
-#ヒストグラムから、実際にCVaRヲケイサン
+#ヒストグラムから、実際にCVaRを計算
 def post_cvar(
     tau,
     alpha: float = CVAR_ALPHA,
     num_bins: int = 201,
+    use_sums: bool = False,
     reward_min: float = CVAR_REWARD_MIN,
     reward_max: float = CVAR_REWARD_MAX,
 ):
@@ -109,11 +116,16 @@ def post_cvar(
     
     tau_array, squeezed = _prepare_cvar_tau(tau)
     counts = tau_array[:, :num_bins]
-    sums = tau_array[:, num_bins: 2 * num_bins]
 
     total_count = counts.sum(axis=1)
     bin_centers = _cvar_bin_centers(num_bins, reward_min, reward_max)
-    bin_mean = np.where(counts > 0, sums / np.maximum(counts, 1e-8), bin_centers[None, :])
+    if use_sums:
+        # ビン内の実際の平均を使用 (精度高)
+        sums = tau_array[:, num_bins: 2 * num_bins]
+        bin_mean = np.where(counts > 0, sums / np.maximum(counts, 1e-8), bin_centers[None, :])
+    else:
+        # ビン中心を代表値として使用 (誤差は最大 bin_width/2)
+        bin_mean = bin_centers[None, :]
 
     tail_target = alpha * total_count
     previous_cumulative = np.cumsum(counts, axis=1) - counts
